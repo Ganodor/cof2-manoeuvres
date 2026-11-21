@@ -5,7 +5,6 @@ Module pour **Foundry VTT (v13 / v14)** et le système **Chroniques Oubliées Fa
 ## Fonctionnalités
 - **Onglet Manœuvres dédié :** Accès aux 8 manœuvres officielles (*Bloquer, Désarmer, Désengager, Étourdir, Feinter, Gêner, Renverser, Repousser*) sur les fiches de personnages et PNJ.
 - **Jets opposés automatiques :** Gestion des modificateurs (taille, position) et résolution des jets dans le chat avec application des états.
-- **Compendium intégré :** Journal **Cof2 - Règles des Manœuvres**.
 
 ## Installation
 1. Dans Foundry VTT, allez dans **Modules complémentaires** > **Installer un module**.
