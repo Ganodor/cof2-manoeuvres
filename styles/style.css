@@ -1,0 +1,587 @@
+/* Autoriser le dépassement des signets latéraux sur le bord droit de la fiche */
+.sheet.actor {
+  overflow: visible !important;
+}
+
+.sheet.actor section.tab[data-group="primary"]:not(.active) {
+  display: none !important;
+}
+
+.sheet.actor section.tab[data-group="primary"].mv-man-tab-section.active {
+  display: block !important;
+}
+
+/* ==========================================================================
+   1. BARRE D'ONGLETS LATÉRALE DROITE (SIGNETS EXTERNES DE LA FICHE)
+   ========================================================================== */
+
+/* Conteneur vertical des signets latéraux positionné à droite de la fiche */
+.mv-side-tabs {
+  position: absolute;
+  top: 72px;
+  right: -39px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  z-index: 50;
+}
+
+/* Boutons d'onglets au repos : fond sombre sans bordure dorée (identique pour Manœuvres et Sort) */
+.mv-side-tabs > a,
+.mv-side-tabs .mv-side-tab-btn,
+.mv-side-tabs .mv-man-side-btn {
+  width: 38px !important;
+  height: 38px !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  background: #1b1d24 !important;
+  color: #f0ece1 !important;
+  border: 1px solid rgba(255, 255, 255, 0.12) !important;
+  border-left: none !important;
+  border-radius: 0 6px 6px 0 !important;
+  cursor: pointer;
+  font-size: 1.05rem !important;
+  box-shadow: 2px 2px 6px rgba(0, 0, 0, 0.45) !important;
+  text-decoration: none !important;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease !important;
+}
+
+/* Icônes des boutons latéraux au repos */
+.mv-side-tabs > a i,
+.mv-side-tabs .mv-side-tab-btn i,
+.mv-side-tabs .mv-man-side-btn i {
+  color: #f0ece1 !important;
+  transition: text-shadow 0.15s ease, color 0.15s ease !important;
+}
+
+/* Survol d'un bouton latéral inactif : bordure dorée et lueur rouge sur l'icône */
+.mv-side-tabs > a:hover:not(.active),
+.mv-side-tabs .mv-side-tab-btn:hover:not(.active),
+.mv-side-tabs .mv-man-side-btn:hover:not(.active) {
+  background: #1b1d24 !important;
+  border-color: #d8c39e !important;
+  border-left: none !important;
+}
+
+.mv-side-tabs > a:hover:not(.active) i,
+.mv-side-tabs .mv-side-tab-btn:hover:not(.active) i,
+.mv-side-tabs .mv-man-side-btn:hover:not(.active) i {
+  color: #f0ece1 !important;
+  text-shadow: 0 0 8px #e74c3c, 0 0 3px #ff4d4d !important;
+}
+
+/* Bouton latéral actif (.active) : fond doré plein et icône sombre */
+.mv-side-tabs > a.active,
+.mv-side-tabs .mv-side-tab-btn.active,
+.mv-side-tabs .mv-man-side-btn.active {
+  background: #d8c39e !important;
+  color: #1b1d24 !important;
+  border-color: #d8c39e !important;
+  border-left: none !important;
+}
+
+.mv-side-tabs > a.active i,
+.mv-side-tabs .mv-side-tab-btn.active i,
+.mv-side-tabs .mv-man-side-btn.active i {
+  color: #1b1d24 !important;
+  text-shadow: none !important;
+}
+
+/* Masquage automatique des signets latéraux lorsque la fiche est réduite/minimisée */
+.minimized .mv-side-tabs,
+.application.minimized .mv-side-tabs,
+.app.minimized .mv-side-tabs,
+.mv-side-tabs.mv-sheet-minimized {
+  display: none !important;
+}
+
+/* Bouton Manœuvres intégré dans la barre d'onglets principale (hérite des couleurs natives COF2) */
+nav.sheet-tabs .mv-man-main-tab-btn {
+  display: inline-flex;
+  align-items: center;
+  white-space: nowrap;
+}
+
+/* ==========================================================================
+   2. ONGLET MANŒUVRES DANS LA FICHE DE PERSONNAGE (BANNIÈRE & CARTES)
+   ========================================================================== */
+
+/* Conteneur principal de l'onglet Manœuvres */
+.mv-man-tab-section {
+  padding: 10px;
+}
+
+.mv-man-container {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* Bannière explicative en haut de l'onglet Manœuvres */
+.mv-man-banner {
+  background: rgba(27, 29, 36, 0.9);
+  border: 1px solid rgba(216, 195, 158, 0.45);
+  border-radius: 6px;
+  padding: 8px 12px;
+  color: #f0ece1;
+}
+
+.mv-man-banner-title {
+  font-weight: 700;
+  font-size: 1rem;
+  color: #e5cc9b;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.mv-man-banner-sub {
+  font-size: 0.82rem;
+  color: #c5c9d4;
+  margin-top: 2px;
+  white-space: normal !important;
+  word-break: break-word;
+}
+
+/* Liste verticale des 8 cartes de manœuvres */
+.mv-man-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+/* Carte individuelle d'une manœuvre */
+.mv-man-card {
+  background: rgba(27, 29, 36, 0.88);
+  border: 1px solid rgba(216, 195, 158, 0.28);
+  border-radius: 6px;
+  overflow: hidden;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.mv-man-card:hover {
+  border-color: #d8c39e;
+  background: rgba(36, 39, 49, 0.95);
+}
+
+/* Ligne principale d'une carte (icône + titre + boutons d'action) */
+.mv-man-card-main {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 10px;
+}
+
+.mv-man-icon {
+  border-radius: 5px;
+  border: 1px solid rgba(216, 195, 158, 0.45);
+  flex-shrink: 0;
+}
+
+.mv-man-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.mv-man-title-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-wrap: wrap;
+}
+
+.mv-man-name {
+  font-weight: 700;
+  font-size: 0.96rem;
+  color: #ffffff;
+}
+
+/* Badge du modificateur et badge rouge d'action limitée (L) */
+.mv-man-mod {
+  font-size: 0.8rem;
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: rgba(229, 204, 155, 0.2);
+  color: #e5cc9b;
+}
+
+.mv-man-action-badge {
+  font-size: 0.75rem;
+  font-weight: 800;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: #c0392b;
+  color: #ffffff;
+}
+
+/* Boutons Info (i) et Lancer le jet (d20) à droite de chaque carte */
+.mv-man-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.mv-man-info-btn,
+.mv-man-roll-btn {
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  cursor: pointer;
+  border: 1px solid rgba(216, 195, 158, 0.4);
+  background: rgba(255, 255, 255, 0.06);
+  color: #e5cc9b;
+}
+
+.mv-man-info-btn:hover,
+.mv-man-info-btn.active,
+.mv-man-roll-btn:hover {
+  background: #e5cc9b;
+  color: #1b1d24;
+  border-color: #e5cc9b;
+}
+
+/* Panneau dépliable de règles détaillées sous chaque carte */
+.mv-man-details {
+  padding: 8px 12px;
+  background: rgba(0, 0, 0, 0.35);
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  color: #dde0e8;
+  font-size: 0.84rem;
+  line-height: 1.4;
+  white-space: normal !important;
+  word-break: break-word;
+  overflow-wrap: break-word;
+}
+
+.mv-man-details p {
+  margin: 0 0 4px 0;
+  white-space: normal !important;
+  word-break: break-word;
+}
+
+.mv-man-details.mv-hidden {
+  display: none !important;
+}
+
+/* ==========================================================================
+   3. FENÊTRE DE CONFIGURATION DU JET (POPUP ATTAQUANT & DÉFENSEUR)
+   ========================================================================== */
+
+/* Conteneur général de la boîte de dialogue */
+.mv-man-dialog {
+  border: 1px solid #d8c39e !important;
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.75) !important;
+}
+
+.mv-man-dialog .window-header {
+  background: #14161c !important;
+  color: #e5cc9b !important;
+  border-bottom: 1px solid rgba(216, 195, 158, 0.4) !important;
+}
+
+.mv-man-dialog .window-header .window-title,
+.mv-man-dialog .window-header a {
+  color: #e5cc9b !important;
+}
+
+.mv-man-dialog .window-content {
+  background: #1b1d24 !important;
+  color: #f0ece1 !important;
+  padding: 14px !important;
+}
+
+.mv-man-roll-dialog {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+/* En-tête de la popup : icône de la manœuvre à gauche et cible tout à droite */
+.mv-man-roll-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  box-sizing: border-box;
+  padding-bottom: 10px;
+  border-bottom: 1px solid rgba(216, 195, 158, 0.35);
+}
+
+.mv-man-roll-head strong {
+  color: #e5cc9b;
+  font-size: 1rem;
+}
+
+.mv-man-roll-head img {
+  border-radius: 5px;
+  border: 1px solid rgba(216, 195, 158, 0.45);
+}
+
+/* Bloc de la cible aligné symétriquement à droite de l'en-tête */
+.mv-man-roll-target {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.mv-man-roll-target-name {
+  font-size: 0.85rem;
+  color: #e6c67c;
+  max-width: 130px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: right;
+}
+
+.mv-man-roll-target img {
+  flex-shrink: 0;
+  border-radius: 4px;
+  border: 1px solid rgba(230, 198, 124, 0.55);
+  object-fit: cover;
+}
+
+/* Encadré d'aperçu en direct de la formule calculée et infobulles au survol */
+.mv-man-formula-box {
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid rgba(216, 195, 158, 0.4);
+  border-radius: 5px;
+  padding: 7px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.mv-man-formula-label {
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: #b8bcc8;
+  font-weight: 700;
+}
+
+.mv-man-formula-text {
+  font-size: 0.92rem;
+  font-weight: 700;
+  color: #e5cc9b;
+  word-break: break-word;
+  line-height: 1.35;
+}
+
+.mv-man-formula-token {
+  border-radius: 3px;
+  cursor: help;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.mv-man-formula-token:hover {
+  background: rgba(229, 204, 155, 0.22);
+  color: #ffffff;
+}
+
+/* Bandeau d'alerte rouge pour les rendements décroissants (répétitions sur la même cible) */
+.mv-man-repetition-info {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 0.84rem;
+  color: #ff9f89;
+  background: rgba(231, 76, 60, 0.14);
+  border: 1px solid rgba(231, 76, 60, 0.4);
+  border-radius: 4px;
+  padding: 5px 9px;
+}
+
+.mv-man-repetition-info strong {
+  color: #ffffff;
+}
+
+/* Lignes d'options, cases à cocher et champs de saisie de la popup */
+.mv-man-opt {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  color: #f0ece1;
+}
+
+.mv-man-row-opt {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.mv-man-row-opt label {
+  color: #f0ece1;
+  font-weight: 500;
+}
+
+.mv-man-row-opt select,
+.mv-man-row-opt input {
+  background: #282c37 !important;
+  color: #ffffff !important;
+  border: 1px solid rgba(216, 195, 158, 0.4) !important;
+  border-radius: 4px;
+  padding: 5px 8px;
+  height: 30px;
+}
+
+.mv-man-row-opt input[type="number"] {
+  width: 80px;
+  text-align: center;
+}
+
+/* ==========================================================================
+   4. BOUTONS D'ACTION DE LA POPUP (LANCER LE TEST / ANNULER)
+   ========================================================================== */
+
+.mv-man-dialog .dialog-buttons {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.mv-man-dialog .dialog-buttons button {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  gap: 6px !important;
+  background: #282c37 !important;
+  color: #f0ece1 !important;
+  border: 1px solid rgba(216, 195, 158, 0.45) !important;
+  border-radius: 4px !important;
+  padding: 6px 12px !important;
+  font-weight: 600 !important;
+  text-shadow: none !important;
+  box-shadow: none !important;
+  white-space: nowrap !important;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease !important;
+}
+
+.mv-man-dialog .dialog-buttons button i {
+  color: #e5cc9b !important;
+}
+
+/* Mise en valeur dorée du bouton principal de validation */
+.mv-man-dialog .dialog-buttons button.default,
+.mv-man-dialog .dialog-buttons button[data-button="roll"] {
+  background: rgba(216, 195, 158, 0.18) !important;
+  border-color: #d8c39e !important;
+  color: #ffffff !important;
+}
+
+.mv-man-dialog .dialog-buttons button:hover {
+  background: #d8c39e !important;
+  color: #1b1d24 !important;
+  border-color: #d8c39e !important;
+}
+
+.mv-man-dialog .dialog-buttons button:hover i {
+  color: #1b1d24 !important;
+}
+
+/* ==========================================================================
+   5. CARTES DE CHAT & RÉSOLUTION DU TEST OPPOSÉ
+   ========================================================================== */
+
+/* Carte principale affichée dans le chat lors d'une manœuvre */
+.mv-man-chat-card {
+  border: 1px solid rgba(216, 195, 158, 0.45);
+  background: #1b1d24;
+  color: #f0ece1;
+  border-radius: 6px;
+  padding: 8px;
+  margin-top: 4px;
+}
+
+.mv-man-chat-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+  padding-bottom: 6px;
+  margin-bottom: 6px;
+}
+
+.mv-man-chat-header h4 {
+  margin: 0;
+  color: #e5cc9b;
+  font-weight: 700;
+}
+
+.mv-man-chat-sub {
+  font-size: 0.78rem;
+  color: #b8bcc8;
+}
+
+.mv-man-chat-desc {
+  font-size: 0.82rem;
+  line-height: 1.35;
+}
+
+/* Zone et bouton permettant au défenseur de lancer le test opposé */
+.mv-man-oppose-zone {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.mv-man-oppose-btn {
+  width: 100%;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  gap: 6px !important;
+  background: rgba(216, 195, 158, 0.18) !important;
+  color: #f0ece1 !important;
+  border: 1px solid #d8c39e !important;
+  border-radius: 4px !important;
+  padding: 5px 10px !important;
+  font-weight: 600 !important;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease !important;
+}
+
+.mv-man-oppose-btn:hover:not(:disabled) {
+  background: #d8c39e !important;
+  color: #1b1d24 !important;
+}
+
+.mv-man-oppose-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+/* Bandeaux de verdict final (vert si manœuvre réussie, rouge si repoussée) */
+.mv-man-outcome {
+  margin-top: 6px;
+  padding: 6px 8px;
+  border-radius: 4px;
+  font-weight: 700;
+  text-align: center;
+  font-size: 0.86rem;
+}
+
+.mv-man-outcome-success {
+  background: rgba(46, 204, 113, 0.2);
+  border: 1px solid #2ecc71;
+  color: #6ef0a3;
+}
+
+.mv-man-outcome-fail {
+  background: rgba(231, 76, 60, 0.2);
+  border: 1px solid #e74c3c;
+  color: #ff8a7d;
+}
