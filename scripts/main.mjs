@@ -236,22 +236,21 @@ function getActorChaMod(actor) {
   return getActorAbilityTotal(actor, "cha");
 }
 
-// Vérifie si l'acteur possède un profil principal de la famille des combattants
-function isActorMainCombatantProfile(actor) {
-  if (!actor?.items) return false;
-  return actor.items.some(i =>
-    i.type === "profile" &&
-    i.system?.mainProfile === true &&
-    String(i.system?.family || "").toLowerCase() === "combattant"
-  );
-}
-
-// Additionne les bonus provenant du module compagnon (Cof2 - Manoeuvres +)
+// Collecte les bonus natifs (subtype === "manoeuvre") et laisse les extensions (ex. Cof2 - Manoeuvres +) injecter les leurs
 function getManoeuvreItemAndEffectBonuses(actor, manoeuvre) {
   if (!actor) return { total: 0, sources: [] };
 
-  let total = 0;
-  const sources = [];
+  const context = {
+    total: 0,
+    sources: [],
+    add(value, label) {
+      const val = Number(value);
+      if (!Number.isFinite(val) || val === 0) return;
+      this.total += val;
+      this.sources.push(`${label} ${val >= 0 ? "+" : ""}${val}`);
+    }
+  };
+
   const normalize = (s) => String(s || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
   const targetId = normalize(manoeuvre.id);
 
@@ -262,39 +261,26 @@ function getManoeuvreItemAndEffectBonuses(actor, manoeuvre) {
     if (typeof sys.acquired === "boolean" && !sys.acquired) continue;
 
     if (Array.isArray(sys.actions)) {
-      const plusMap = item.getFlag("cof2-manoeuvres-plus", "modifiers") || {};
-
-      sys.actions.forEach((action, actionIdx) => {
+      sys.actions.forEach((action) => {
         if (!Array.isArray(action.modifiers)) return;
         const requiresEquip = Array.isArray(action.conditions) && action.conditions.some(c => c.predicate === "isEquipped");
         if (requiresEquip && sys.equipped !== true) return;
 
-        action.modifiers.forEach((mod, modIdx) => {
-          const plusEntry = plusMap[`${actionIdx}_${modIdx}`];
-          if (mod?.subtype !== "manoeuvre" && !plusEntry) return;
-
-          // Si le bonus vient d'une propriété d'arme, exige un profil principal de la famille des combattants
-          if (plusEntry?.isWeaponPreset && !isActorMainCombatantProfile(actor)) return;
-
-          // Si le bonus vient d'une arme polyvalente tenue à 1 main (bouclier équipé), on le suspend
-          if (plusEntry?.isWeaponPreset && game.modules.get("cof2-arme-polyvalent")?.active && item.getFlag("cof2-arme-polyvalent", "grip") === "1h") {
-            return;
-          }
-
-          const modTarget = normalize(plusEntry?.target || mod.target || "all");
-          const val = Number(plusEntry?.value ?? mod.value ?? 0);
-          if (!Number.isFinite(val) || val === 0) return;
-
+        action.modifiers.forEach((mod) => {
+          if (mod?.subtype !== "manoeuvre") return;
+          const modTarget = normalize(mod.target || "all");
           if (modTarget === "all" || modTarget === targetId) {
-            total += val;
-            sources.push(item.name + " " + (val >= 0 ? "+" : "") + val);
+            context.add(mod.value, item.name);
           }
         });
       });
     }
   }
 
-  return { total, sources };
+  // Permet aux modules complémentaires (comme Cof2 - Manoeuvres +) d'ajouter leurs modificateurs
+  Hooks.callAll("cof2-manoeuvres.getRollBonuses", actor, manoeuvre, context);
+
+  return { total: context.total, sources: context.sources };
 }
 
 function getDiminishingReturnsCount(actor, targetToken, manoeuvreId) {
