@@ -25,6 +25,6 @@
     "styles/style.css"
   ],
   "url": "https://github.com/Ganodor/Cof2-Manoeuvres",
-  "manifest": "https://raw.githubusercontent.com/Ganodor/Cof2-Manoeuvres/main/module.json",
+  "manifest": "https://raw.githubusercontent.com/Ganodor/cof2-manoeuvres/main/module.json",
   "download": "https://github.com/archive/refs/tags/v1.0.0.zip"
 }
