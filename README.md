@@ -11,6 +11,6 @@ Module pour **Foundry VTT (v13 / v14)** et le système **Chroniques Oubliées Fa
 1. Dans Foundry VTT, allez dans **Modules complémentaires** > **Installer un module**.
 2. Collez l'URL du manifeste (`module.json` brut sur GitHub) dans le champ prévu :
    ```text
-   https://raw.githubusercontent.com/Ganodor/Cof2-Manoeuvres/main/module.json
+   https://raw.githubusercontent.com/Ganodor/cof2-manoeuvres/main/module.json
    ```
 3. Cliquez sur **Installer** et activez le module dans votre monde.
