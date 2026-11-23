@@ -1,0 +1,46 @@
+name: Publication du module
+
+# Se déclenche quand une release GitHub est publiée (tag au format vX.Y.Z).
+# Le workflow met à jour la version et les liens du manifeste, construit le zip
+# et joint module.json + cof2-manoeuvres.zip à la release.
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Récupération du code
+        uses: actions/checkout@v4
+
+      - name: Version à partir du tag
+        id: version
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Mise à jour du manifeste
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          MANIFEST: https://github.com/${{ github.repository }}/releases/latest/download/module.json
+          DOWNLOAD: https://github.com/${{ github.repository }}/releases/download/${{ github.event.release.tag_name }}/cof2-manoeuvres.zip
+        run: |
+          jq --arg v "$VERSION" --arg m "$MANIFEST" --arg d "$DOWNLOAD" \
+            '.version = $v | .manifest = $m | .download = $d' module.json > module.tmp.json
+          mv module.tmp.json module.json
+          cat module.json
+
+      - name: Construction du zip
+        run: |
+          FILES="module.json README.md CHANGELOG.md scripts styles"
+          [ -f LICENSE ] && FILES="$FILES LICENSE"
+          zip -r cof2-manoeuvres.zip $FILES
+
+      - name: Ajout des fichiers à la release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            module.json
+            cof2-manoeuvres.zip

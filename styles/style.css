@@ -291,7 +291,8 @@ nav.sheet-tabs .mv-man-main-tab-btn {
   color: #e5cc9b !important;
 }
 
-.mv-man-dialog .window-content {
+.mv-man-dialog .window-content,
+.mv-man-dialog .dialog-content {
   background: #1b1d24 !important;
   color: #f0ece1 !important;
   padding: 14px !important;
@@ -348,44 +349,6 @@ nav.sheet-tabs .mv-man-main-tab-btn {
   border-radius: 4px;
   border: 1px solid rgba(230, 198, 124, 0.55);
   object-fit: cover;
-}
-
-/* Encadré d'aperçu en direct de la formule calculée et infobulles au survol */
-.mv-man-formula-box {
-  background: rgba(0, 0, 0, 0.35);
-  border: 1px solid rgba(216, 195, 158, 0.4);
-  border-radius: 5px;
-  padding: 7px 10px;
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-}
-
-.mv-man-formula-label {
-  font-size: 0.78rem;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  color: #b8bcc8;
-  font-weight: 700;
-}
-
-.mv-man-formula-text {
-  font-size: 0.92rem;
-  font-weight: 700;
-  color: #e5cc9b;
-  word-break: break-word;
-  line-height: 1.35;
-}
-
-.mv-man-formula-token {
-  border-radius: 3px;
-  cursor: help;
-  transition: background 0.15s ease, color 0.15s ease;
-}
-
-.mv-man-formula-token:hover {
-  background: rgba(229, 204, 155, 0.22);
-  color: #ffffff;
 }
 
 /* Bandeau d'alerte rouge pour les rendements décroissants (répétitions sur la même cible) */
@@ -492,96 +455,70 @@ nav.sheet-tabs .mv-man-main-tab-btn {
   color: #1b1d24 !important;
 }
 
-/* ==========================================================================
-   5. CARTES DE CHAT & RÉSOLUTION DU TEST OPPOSÉ
-   ========================================================================== */
-
-/* Carte principale affichée dans le chat lors d'une manœuvre */
-.mv-man-chat-card {
-  border: 1px solid rgba(216, 195, 158, 0.45);
-  background: #1b1d24;
-  color: #f0ece1;
-  border-radius: 6px;
-  padding: 8px;
-  margin-top: 4px;
-}
-
-.mv-man-chat-header {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.12);
-  padding-bottom: 6px;
-  margin-bottom: 6px;
-}
-
-.mv-man-chat-header h4 {
-  margin: 0;
-  color: #e5cc9b;
-  font-weight: 700;
-}
-
 .mv-man-chat-sub {
   font-size: 0.78rem;
   color: #b8bcc8;
 }
 
-.mv-man-chat-desc {
-  font-size: 0.82rem;
-  line-height: 1.35;
+.mv-man-block-prompt {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px;
+  border-left: 3px solid #d8c39e;
+  background: rgba(216, 195, 158, 0.1);
 }
 
-/* Zone et bouton permettant au défenseur de lancer le test opposé */
-.mv-man-oppose-zone {
+.mv-man-block-prompt + .mv-man-btn-row {
+  margin-top: 6px;
+}
+
+.mv-man-btn-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.mv-man-conditions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 10px;
+  padding: 8px;
+  border-left: 3px solid #c0504d;
+  background: rgba(192, 80, 77, 0.12);
+}
+
+.mv-man-conditions-title {
+  font-weight: bold;
+}
+
+.mv-man-result-notice {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
   margin-top: 8px;
-  padding-top: 8px;
-  border-top: 1px solid rgba(255, 255, 255, 0.12);
+  padding: 8px;
+  border-left: 3px solid #d8c39e;
+  background: rgba(216, 195, 158, 0.1);
 }
 
-.mv-man-oppose-btn {
-  width: 100%;
-  display: inline-flex !important;
-  align-items: center !important;
-  justify-content: center !important;
-  gap: 6px !important;
-  background: rgba(216, 195, 158, 0.18) !important;
-  color: #f0ece1 !important;
-  border: 1px solid #d8c39e !important;
-  border-radius: 4px !important;
-  padding: 5px 10px !important;
-  font-weight: 600 !important;
+.mv-man-maintain-btn {
+  align-self: flex-start;
+  padding: 4px 8px;
+  border: 1px solid #d8c39e;
+  border-radius: 4px;
+  background: rgba(216, 195, 158, 0.18);
+  color: inherit;
   cursor: pointer;
-  transition: background 0.15s ease, color 0.15s ease !important;
 }
 
-.mv-man-oppose-btn:hover:not(:disabled) {
-  background: #d8c39e !important;
-  color: #1b1d24 !important;
+.mv-man-maintain-btn:hover:not(:disabled) {
+  background: #d8c39e;
+  color: #1b1d24;
 }
 
-.mv-man-oppose-btn:disabled {
+.mv-man-maintain-btn:disabled {
   opacity: 0.6;
   cursor: default;
-}
-
-/* Bandeaux de verdict final (vert si manœuvre réussie, rouge si repoussée) */
-.mv-man-outcome {
-  margin-top: 6px;
-  padding: 6px 8px;
-  border-radius: 4px;
-  font-weight: 700;
-  text-align: center;
-  font-size: 0.86rem;
-}
-
-.mv-man-outcome-success {
-  background: rgba(46, 204, 113, 0.2);
-  border: 1px solid #2ecc71;
-  color: #6ef0a3;
-}
-
-.mv-man-outcome-fail {
-  background: rgba(231, 76, 60, 0.2);
-  border: 1px solid #e74c3c;
-  color: #ff8a7d;
 }

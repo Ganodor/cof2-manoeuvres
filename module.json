@@ -1,21 +1,26 @@
 {
   "id": "cof2-manoeuvres",
   "title": "Cof2 - Manoeuvres",
-  "description": "Ajoute un onglet latéral Manœuvres sur la fiche de personnage pour lancer rapidement les 8 manœuvres de Chroniques Oubliées Fantasy 2.",
-  "version": "1.0.0",
-  "socket": true,
+  "description": "Ajoute un onglet Manœuvres aux fiches de personnages et de rencontres COF2, avec jets opposés et effets gérés par le système.",
+  "version": "2.0.0",
   "authors": [
     {
       "name": "Ganodor"
     }
   ],
   "compatibility": {
-    "minimum": "13",
+    "minimum": "14",
     "verified": "14"
   },
   "relationships": {
     "systems": [
-      { "id": "co2", "type": "system" }
+      {
+        "id": "co2",
+        "type": "system",
+        "compatibility": {
+          "verified": "2.4.0"
+        }
+      }
     ]
   },
   "esmodules": [
@@ -24,7 +29,10 @@
   "styles": [
     "styles/style.css"
   ],
-  "url": "https://github.com/Ganodor/Cof2-Manoeuvres",
-  "manifest": "https://raw.githubusercontent.com/Ganodor/cof2-manoeuvres/main/module.json",
-  "download": "https://github.com/Ganodor/cof2-manoeuvres/archive/refs/heads/main.zip"
+  "url": "https://github.com/Ganodor/cof2-manoeuvres",
+  "bugs": "https://github.com/Ganodor/cof2-manoeuvres/issues",
+  "readme": "https://github.com/Ganodor/cof2-manoeuvres/blob/main/README.md",
+  "changelog": "https://github.com/Ganodor/cof2-manoeuvres/blob/main/CHANGELOG.md",
+  "manifest": "https://github.com/Ganodor/cof2-manoeuvres/releases/latest/download/module.json",
+  "download": "https://github.com/Ganodor/cof2-manoeuvres/releases/download/v2.0.0/cof2-manoeuvres.zip"
 }

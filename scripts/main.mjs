@@ -3,47 +3,36 @@
    ========================================================================== */
 
 const MODULE_ID = "cof2-manoeuvres";
-const SOCKET_NAME = "module." + MODULE_ID;
+const pendingManoeuvreRolls = new Map();
+const processingManoeuvreResults = new Set();
+const activeManoeuvreActors = new Set();
+// Seuil de critique inatteignable : les manœuvres n'ont pas de notion de réussite critique
+const NO_CRITICAL_THRESHOLD = "100";
 
 Hooks.once("init", () => {
-  const customStatuses = [
-    {
-      id: "manoeuvre-distraire",
-      name: "Distrait (Manœuvre)",
-      img: "icons/tools/instruments/lute-gold-brown.webp",
-      changes: [
-        { key: "system.abilities.per.bonuses.effects", mode: CONST.ACTIVE_EFFECT_MODES.ADD, value: "-10" },
-        { key: "system.combat.def.bonuses.effects", mode: CONST.ACTIVE_EFFECT_MODES.ADD, value: "-5" }
-      ]
-    },
-    {
-      id: "manoeuvre-gener",
-      name: "Gêné (-5 attaque)",
-      img: "icons/magic/control/debuff-chains-purple.webp",
-      changes: [
-        { key: "system.combat.melee.bonuses.effects", mode: CONST.ACTIVE_EFFECT_MODES.ADD, value: "-5" },
-        { key: "system.combat.ranged.bonuses.effects", mode: CONST.ACTIVE_EFFECT_MODES.ADD, value: "-5" },
-        { key: "system.combat.magic.bonuses.effects", mode: CONST.ACTIVE_EFFECT_MODES.ADD, value: "-5" }
-      ]
-    },
-    {
-      id: "manoeuvre-repousser",
-      name: "Acculé (Repoussé)",
-      img: "icons/skills/melee/unarmed-punch-fist-yellow-red.webp",
-      changes: []
-    },
+  // Requête joueur → MJ : relâcher une prise de Bloquer (la cible appartient souvent au MJ)
+  CONFIG.queries ??= {};
+  CONFIG.queries[`${MODULE_ID}.releaseBlock`] = data => handleReleaseBlockQuery(data);
+
+  const manoeuvreStatuses = [
     {
       id: "manoeuvre-desarmer",
-      name: "Désarmé (Arme au sol)",
-      img: "icons/skills/melee/strike-sword-slashing-red.webp",
-      changes: []
+      name: "Désarmé (Manœuvre)",
+      img: "icons/skills/melee/strike-sword-slashing-red.webp"
+    },
+    {
+      id: "manoeuvre-blind",
+      name: "Aveuglé (Manœuvre)",
+      img: "icons/svg/blind.svg"
+    },
+    {
+      id: "manoeuvre-overturned",
+      name: "Renversé (Manœuvre)",
+      img: "systems/co2/ui/effects/upsidedown.webp"
     }
   ];
-
-  for (const st of customStatuses) {
-    if (!CONFIG.statusEffects.some(e => e.id === st.id)) {
-      CONFIG.statusEffects.push(st);
-    }
+  for (const status of manoeuvreStatuses) {
+    if (!CONFIG.statusEffects.some(effect => effect.id === status.id)) CONFIG.statusEffects.push(status);
   }
 
   game.settings.register(MODULE_ID, "tabPlacement", {
@@ -67,6 +56,32 @@ Hooks.once("init", () => {
         }
       }
     }
+  });
+
+  game.settings.register(MODULE_ID, "sizeModifierDirection", {
+    name: "Modificateur de taille",
+    hint: "Sens du modificateur de ±5 par catégorie de taille. « Cible plus grande = malus » : il est plus difficile de manœuvrer une créature plus grande que soi. « Lecture littérale » : -5 par catégorie de taille de moins de la cible, +5 par catégorie de plus.",
+    scope: "world",
+    config: true,
+    type: String,
+    choices: {
+      biggerTargetHarder: "Cible plus grande = malus",
+      literal: "Lecture littérale (cible plus grande = bonus)"
+    },
+    default: "biggerTargetHarder"
+  });
+
+  game.settings.register(MODULE_ID, "diminishingScope", {
+    name: "Rendements décroissants",
+    hint: "Le malus cumulatif de -5 s'applique quand une manœuvre est répétée contre la même cible : quel que soit l'attaquant, ou seulement pour un même attaquant.",
+    scope: "world",
+    config: true,
+    type: String,
+    choices: {
+      target: "Même cible, tous attaquants confondus",
+      attacker: "Même cible et même attaquant"
+    },
+    default: "target"
   });
 });
 
@@ -134,7 +149,7 @@ const MANOEUVRES_LIST = [
     modValue: -5,
     useCha: false,
     sizeSensitive: true,
-    img: "icons/skills/melee/strike-sword-slashing-red.webp",
+    img: "icons/skills/melee/hand-grip-sword-orange.webp",
     summary: "La cible laisse tomber son arme au sol (doit sacrifier son prochain tour pour la ramasser).",
     description: "<p><strong>Désarmer (-5)* — Action limitée (L)</strong></p><p>La cible laisse tomber son arme au sol. Elle peut la ramasser avant tout le monde en sacrifiant son prochain tour (elle n'agira pas).</p><p><em>* -5 au test par catégorie de taille de moins par rapport à celle de l'attaquant, +5 par catégorie de taille de plus.</em></p>"
   },
@@ -145,7 +160,7 @@ const MANOEUVRES_LIST = [
     modValue: -5,
     useCha: false,
     sizeSensitive: false,
-    img: "icons/magic/perception/eye-ringed-glow-angry-red.webp",
+    img: "icons/creatures/eyes/humanoid-single-blind.webp",
     summary: "Cible aveuglée 1 round (-5 en attaque au contact et en DEF, -10 contre une cible à distance).",
     description: "<p><strong>Aveugler (-5) — Action limitée (L)</strong></p><p>La cible est <em>aveuglée</em> pendant 1 round (-5 en attaque au contact et en DEF, -10 contre une cible à distance).</p>"
   },
@@ -156,7 +171,7 @@ const MANOEUVRES_LIST = [
     modValue: -5,
     useCha: false,
     sizeSensitive: true,
-    img: "icons/skills/movement/figure-running-gray.webp",
+    img: "icons/magic/control/silhouette-fall-slip-prone.webp",
     summary: "Cible renversée (-5 en DEF, action d'attaque pour se relever). Déplacement de 10 m possible avant.",
     description: "<p><strong>Renverser (-5, -10 contre un quadrupède)* — Action limitée (L)</strong></p><p>La cible est <em>renversée</em> (-5 en DEF et action d'attaque pour se relever). Cette action peut être précédée d'un déplacement de 10 m en direction de la cible.</p><p><em>* -5 au test par catégorie de taille de moins par rapport à celle de l'attaquant, +5 par catégorie de taille de plus.</em></p>"
   },
@@ -189,69 +204,46 @@ function getActorAbilityTotal(actor, abilityKey) {
   return base + sheetBonus + effectBonus;
 }
 
-function getActorAttackBonusByType(actor, attackType) {
-  const sys = actor?.system || {};
-  const level = Number(sys.details?.level ?? sys.level ?? sys.niveau ?? 1) || 1;
-
-  const readCombatStat = (candidates) => {
-    for (const val of candidates) {
-      if (typeof val === "number" && Number.isFinite(val)) return val;
-      if (val && typeof val === "object") {
-        if (typeof val.total === "number") return val.total;
-        if (typeof val.value === "number") return val.value;
-        if (typeof val.base === "number") {
-          return val.base + (Number(val.bonuses?.sheet ?? 0) || 0) + (Number(val.bonuses?.effects ?? 0) || 0);
-        }
-      }
-    }
-    return null;
-  };
-
-  if (attackType === "finesse") {
-    const fin = readCombatStat([sys.combat?.finesse, sys.attacks?.finesse]);
-    return fin !== null ? fin : level + getActorAbilityTotal(actor, "agi");
-  }
-
-  if (attackType === "ranged") {
-    const ranged = readCombatStat([sys.combat?.ranged, sys.combat?.distance, sys.attacks?.ranged, sys.attacks?.distance]);
-    return ranged !== null ? ranged : level + getActorAbilityTotal(actor, "agi");
-  }
-
-  if (attackType === "magic") {
-    const magic = readCombatStat([sys.combat?.magic, sys.combat?.magique, sys.attacks?.magic, sys.attacks?.magique]);
-    if (magic !== null) return magic;
-    const bestMental = Math.max(
-      getActorAbilityTotal(actor, "int"),
-      getActorAbilityTotal(actor, "vol"),
-      getActorAbilityTotal(actor, "cha")
-    );
-    return level + bestMental;
-  }
-
-  const melee = readCombatStat([sys.combat?.melee, sys.combat?.contact, sys.attacks?.melee, sys.attacks?.contact]);
-  return melee !== null ? melee : level + getActorAbilityTotal(actor, "for");
-}
-
 function getActorChaMod(actor) {
   return getActorAbilityTotal(actor, "cha");
 }
 
-// Vérifie si l'acteur possède un profil principal de la famille des combattants
-function isActorMainCombatantProfile(actor) {
-  if (!actor?.items) return false;
-  return actor.items.some(i =>
-    i.type === "profile" &&
-    i.system?.mainProfile === true &&
-    String(i.system?.family || "").toLowerCase() === "combattant"
-  );
+function getActorManeuverRank(actor) {
+  const rank = actor?.type === "encounter"
+    ? actor.system?.attributes?.nc
+    : actor?.system?.attributes?.level;
+  const value = Number(rank);
+  return Number.isFinite(value) ? value : null;
 }
 
-// Additionne les bonus provenant du module compagnon (Cof2 - Manoeuvres +)
+function getActorNC(actor) {
+  if (actor?.type !== "encounter") return null;
+  const value = Number(actor.system?.attributes?.nc);
+  return Number.isFinite(value) ? value : null;
+}
+
+function isEligibleForStunSave(attacker, target, isSurprised = false) {
+  const attackerRank = getActorManeuverRank(attacker);
+  const targetRank = getActorNC(target);
+  return (isSurprised || target?.statuses?.has("surprised"))
+    && attackerRank !== null && targetRank !== null && targetRank < attackerRank;
+}
+
+// Collecte les bonus natifs (subtype === "manoeuvre") et laisse les extensions (ex. Cof2 - Manoeuvres +) injecter les leurs
 function getManoeuvreItemAndEffectBonuses(actor, manoeuvre) {
   if (!actor) return { total: 0, sources: [] };
 
-  let total = 0;
-  const sources = [];
+  const context = {
+    total: 0,
+    sources: [],
+    add(value, label) {
+      const val = Number(value);
+      if (!Number.isFinite(val) || val === 0) return;
+      this.total += val;
+      this.sources.push(`${label} ${val >= 0 ? "+" : ""}${val}`);
+    }
+  };
+
   const normalize = (s) => String(s || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
   const targetId = normalize(manoeuvre.id);
 
@@ -262,660 +254,1216 @@ function getManoeuvreItemAndEffectBonuses(actor, manoeuvre) {
     if (typeof sys.acquired === "boolean" && !sys.acquired) continue;
 
     if (Array.isArray(sys.actions)) {
-      const plusMap = item.getFlag("cof2-manoeuvres-plus", "modifiers") || {};
-
-      sys.actions.forEach((action, actionIdx) => {
+      sys.actions.forEach((action) => {
         if (!Array.isArray(action.modifiers)) return;
         const requiresEquip = Array.isArray(action.conditions) && action.conditions.some(c => c.predicate === "isEquipped");
         if (requiresEquip && sys.equipped !== true) return;
 
-        action.modifiers.forEach((mod, modIdx) => {
-          const plusEntry = plusMap[`${actionIdx}_${modIdx}`];
-          if (mod?.subtype !== "manoeuvre" && !plusEntry) return;
-
-          // Si le bonus vient d'une propriété d'arme, exige un profil principal de la famille des combattants
-          if (plusEntry?.isWeaponPreset && !isActorMainCombatantProfile(actor)) return;
-
-          // Si le bonus vient d'une arme polyvalente tenue à 1 main (bouclier équipé), on le suspend
-          if (plusEntry?.isWeaponPreset && game.modules.get("cof2-arme-polyvalent")?.active && item.getFlag("cof2-arme-polyvalent", "grip") === "1h") {
-            return;
-          }
-
-          const modTarget = normalize(plusEntry?.target || mod.target || "all");
-          const val = Number(plusEntry?.value ?? mod.value ?? 0);
-          if (!Number.isFinite(val) || val === 0) return;
-
+        action.modifiers.forEach((mod) => {
+          if (mod?.subtype !== "manoeuvre") return;
+          const modTarget = normalize(mod.target || "all");
           if (modTarget === "all" || modTarget === targetId) {
-            total += val;
-            sources.push(item.name + " " + (val >= 0 ? "+" : "") + val);
+            context.add(mod.value, item.name);
           }
         });
       });
     }
   }
 
-  return { total, sources };
+  // Permet aux modules complémentaires (comme Cof2 - Manoeuvres +) d'ajouter leurs modificateurs
+  Hooks.callAll("cof2-manoeuvres.getRollBonuses", actor, manoeuvre, context);
+
+  return { total: context.total, sources: context.sources };
 }
 
-function getDiminishingReturnsCount(actor, targetToken, manoeuvreId) {
-  const combat = game.combat;
-  if (!combat || !actor || !targetToken) return 0;
-
-  const history = combat.getFlag(MODULE_ID, "manoeuvreHistory") || {};
-  const key = actor.id + "_" + targetToken.id + "_" + manoeuvreId;
-  return Number(history[key] || 0);
+function getSizeRank(actor) {
+  const sizes = Object.keys(game.system?.CONST?.TOKEN_SIZE || {});
+  const size = actor?.system?.details?.size;
+  const index = sizes.indexOf(size);
+  return index < 0 ? null : index;
 }
 
-async function incrementDiminishingReturnsCount(actor, targetToken, manoeuvreId) {
-  const combat = game.combat;
-  if (!combat || !actor || !targetToken) return;
-
-  const history = foundry.utils.deepClone(combat.getFlag(MODULE_ID, "manoeuvreHistory") || {});
-  const key = actor.id + "_" + targetToken.id + "_" + manoeuvreId;
-  history[key] = (Number(history[key] || 0)) + 1;
-  await combat.setFlag(MODULE_ID, "manoeuvreHistory", history);
+function getSizeModifier(attacker, target) {
+  const attackerSize = getSizeRank(attacker);
+  const targetSize = getSizeRank(target);
+  if (attackerSize === null || targetSize === null) return 0;
+  const direction = game.settings.get(MODULE_ID, "sizeModifierDirection") === "literal" ? 1 : -1;
+  return (targetSize - attackerSize) * 5 * direction;
 }
 
-/* ==========================================================================
-   4. APPLICATION DES ÉTATS PRÉJUDICIABLES, RELAIS SOCKET MJ & EXPIRATION
-   ========================================================================== */
+// Le système COF2 attend comme source d'un effet l'UUID d'un objet (Actor.X.Item.Y ou Scene.S.Token.T.Actor.X.Item.Y) :
+// avec l'UUID nu d'un acteur, CustomEffectData#sourceParts ne retrouve pas l'acteur et la fiche de la cible plante.
+// On ajoute donc un identifiant d'objet fictif : l'acteur est retrouvé, l'objet est simplement absent.
+const EFFECT_SOURCE_ITEM_ID = "cof2Manoeuvres00";
+function getEffectSourceUuid(actorUuid) {
+  if (!actorUuid) return null;
+  return actorUuid.includes(".Item.") ? actorUuid : `${actorUuid}.Item.${EFFECT_SOURCE_ITEM_ID}`;
+}
 
-function resolveActorFromPayload(payload) {
-  if (payload.targetTokenId && canvas?.tokens) {
-    const tok = canvas.tokens.get(payload.targetTokenId);
-    if (tok?.actor) return tok.actor;
+// Répare les effets de manœuvre créés par les versions précédentes (source = UUID nu de l'acteur),
+// qui empêchaient d'ouvrir la fiche de la cible.
+async function repairManoeuvreEffectSources() {
+  const actors = new Set(game.actors.contents);
+  for (const scene of game.scenes) {
+    for (const token of scene.tokens) {
+      if (!token.actorLink && token.actor) actors.add(token.actor);
+    }
   }
-  if (payload.targetActorId) {
-    const act = game.actors.get(payload.targetActorId);
-    if (act) return act;
+
+  let repaired = 0;
+  for (const actor of actors) {
+    const effects = actor.system?.toObject?.().currentEffects;
+    if (!Array.isArray(effects) || effects.length === 0) continue;
+    let changed = false;
+    for (const effect of effects) {
+      if (!effect.slug?.startsWith("manoeuvre-")) continue;
+      const fixedSource = getEffectSourceUuid(effect.source);
+      if (fixedSource && fixedSource !== effect.source) {
+        effect.source = fixedSource;
+        changed = true;
+      }
+      for (const modifier of effect.modifiers ?? []) {
+        const fixedModifierSource = getEffectSourceUuid(modifier.source);
+        if (fixedModifierSource && fixedModifierSource !== modifier.source) {
+          modifier.source = fixedModifierSource;
+          changed = true;
+        }
+      }
+    }
+    if (!changed) continue;
+    try {
+      await actor.update({ "system.currentEffects": effects });
+      repaired++;
+    } catch (error) {
+      console.error(`${MODULE_ID} | Réparation des effets impossible pour ${actor.name} :`, error);
+    }
   }
-  return null;
+  if (repaired) ui.notifications.info(`Cof2 - Manœuvres : effets réparés sur ${repaired} acteur(s).`);
 }
 
-function buildExpiryFlag(attackerActorId) {
-  const combat = game.combat;
-  if (!combat || !attackerActorId) return null;
-  const attackerCombatant = combat.combatants.find(c => c.actorId === attackerActorId);
-  if (!attackerCombatant) return null;
+// Les malus de test imposés par une manœuvre (ex. Distraire : -10 en PER) s'appliquent d'office :
+// on les présélectionne dans la fenêtre de test du système (champ `selected` lu par le modèle Handlebars).
+function isManoeuvreSkillBonus(bonus) {
+  return bonus?.sourceType === "CustomEffectData"
+    && (bonus.additionalInfos === "Manœuvre" || String(bonus.name || "").startsWith("Manœuvre :"));
+}
+
+Hooks.once("setup", () => {
+  if (game.system.id !== "co2") return;
+  const proto = CONFIG.Actor.documentClass?.prototype;
+  const original = proto?.getSkillBonuses;
+  if (typeof original !== "function" || original._cof2ManoeuvresWrapped) return;
+
+  const wrapped = function (...args) {
+    const bonuses = original.apply(this, args);
+    if (!Array.isArray(bonuses)) return bonuses;
+    for (const bonus of bonuses) {
+      if (isManoeuvreSkillBonus(bonus)) bonus.selected = true;
+    }
+    return bonuses;
+  };
+  wrapped._cof2ManoeuvresWrapped = true;
+  proto.getSkillBonuses = wrapped;
+
+  // Gêner : ajoute le -5 au champ Malus des jets d'attaque (formule 1d20+7-5 plutôt que 1d20+2)
+  const originalRollAttack = proto.rollAttack;
+  if (typeof originalRollAttack === "function" && !originalRollAttack._cof2ManoeuvresWrapped) {
+    const wrappedRollAttack = function (item, options = {}, ...rest) {
+      const type = options?.type ?? "attack";
+      if (type === "attack" && !options?.auto && hasGenerAttackPenalty(this)) {
+        options = { ...options, skillMalus: (Number(options.skillMalus) || 0) + GENER_ATTACK_PENALTY };
+      }
+      return originalRollAttack.call(this, item, options, ...rest);
+    };
+    wrappedRollAttack._cof2ManoeuvresWrapped = true;
+    proto.rollAttack = wrappedRollAttack;
+  }
+});
+
+Hooks.once("ready", () => {
+  if (game.system.id !== "co2" || game.users.activeGM?.id !== game.user.id) return;
+  repairManoeuvreEffectSources().catch(error => console.error(`${MODULE_ID} | Échec de la réparation des effets :`, error));
+});
+
+function buildEffectModifier(actor, subtype, target, value) {
   return {
-    combatId: combat.id,
-    attackerCombatantId: attackerCombatant.id,
-    createdRound: combat.round ?? 0,
-    createdTurn: combat.turn ?? 0
+    source: getEffectSourceUuid(actor.uuid),
+    type: "feature",
+    subtype,
+    target,
+    apply: "others",
+    value: String(value),
+    choiceGroup: 0,
+    additionalInfos: "Manœuvre"
   };
 }
 
-async function executeApplyManoeuvreOutcome(payload) {
-  const targetActor = resolveActorFromPayload(payload);
-  if (!targetActor) return;
+function buildManoeuvreEffect(actor, manoeuvre, options, attackerTokenId) {
+  const statuses = [];
+  const modifiers = [];
+  const duration = "1";
+  let hasTimedEffect = true;
+  let name = `Manœuvre : ${manoeuvre.name}`;
+  let slugSuffix = "";
 
-  const expiry = buildExpiryFlag(payload.attackerActorId);
-  const manId = payload.manoeuvreId;
+  switch (manoeuvre.id) {
+    case "distraire":
+      statuses.push("surprised");
+      modifiers.push(buildEffectModifier(actor, "skill", "per", -10));
+      break;
+    case "gener":
+      if (options.generChoice === "attackPenalty") {
+        // Pas de modificateur de combat (il serait fondu dans @atc/@atd/@atm) : le -5 est ajouté
+        // au champ Malus de la fenêtre d'attaque, cf. le wrapper de rollAttack
+        name = `Manœuvre : ${manoeuvre.name} (${GENER_ATTACK_PENALTY} en attaque)`;
+        slugSuffix = GENER_ATTACK_SLUG_SUFFIX;
+      } else {
+        statuses.push("slowed");
+      }
+      break;
+    case "repousser":
+      if (options.isCornered) {
+        const strength = getActorAbilityTotal(actor, "for");
+        modifiers.push(buildEffectModifier(actor, "combat", "def", -(strength + 3)));
+      } else {
+        hasTimedEffect = false;
+      }
+      break;
+    case "bloquer":
+      statuses.push("immobilized");
+      break;
+    case "aveugler":
+      statuses.push("manoeuvre-blind");
+      modifiers.push(
+        buildEffectModifier(actor, "combat", "melee", -5),
+        buildEffectModifier(actor, "combat", "ranged", -10),
+        buildEffectModifier(actor, "combat", "def", -5)
+      );
+      break;
+    case "renverser":
+      statuses.push("manoeuvre-overturned");
+      modifiers.push(buildEffectModifier(actor, "combat", "def", -5));
+      break;
+    case "etourdir":
+      statuses.push("stun");
+      break;
+    case "desarmer":
+      hasTimedEffect = false;
+      break;
+  }
 
-  const applyNativeStatus = async (statusId, hasExpiry, dynamicChanges = null) => {
-    if (!targetActor.statuses?.has(statusId)) {
-      await targetActor.toggleStatusEffect(statusId, { active: true });
-    }
-    const statusEffect = targetActor.effects.find(e => e.statuses?.has(statusId));
-    if (statusEffect) {
-      if (Array.isArray(dynamicChanges) && dynamicChanges.length > 0) {
-        await statusEffect.update({ changes: dynamicChanges });
-      }
-      if (hasExpiry && expiry) {
-        await statusEffect.setFlag(MODULE_ID, "expiry", expiry);
-        await statusEffect.setFlag(MODULE_ID, "appliedManoeuvre", manId);
-      }
-    }
+  if (!hasTimedEffect) return null;
+
+  const attackerId = attackerTokenId || actor.id;
+  return {
+    name,
+    source: getEffectSourceUuid(actor.uuid),
+    statuses: [...new Set(statuses)],
+    unit: getManoeuvreEffectUnit(manoeuvre.id, options),
+    duration,
+    startedAt: game.combat?.round ?? 0,
+    remainingTurn: 1,
+    modifiers,
+    formula: "",
+    formulaType: "damage",
+    elementType: "",
+    slug: `manoeuvre-${attackerId}-${manoeuvre.id}${slugSuffix}`
   };
+}
 
-  if (manId === "distraire") {
-    await applyNativeStatus("manoeuvre-distraire", true);
-  } else if (manId === "gener") {
-    if (payload.generChoice === "attackPenalty") {
-      await applyNativeStatus("manoeuvre-gener", true);
-    } else {
-      await applyNativeStatus("slowed", true);
+/* --- Durée des effets ---
+   - Par défaut (Distraire, Gêner, Aveugler, Étourdir, Repousser acculé, Bloquer sans maintien possible) :
+     unité « round » du système → l'effet couvre le prochain tour de la cible et expire à la fin de ce tour.
+   - Effets persistants (unité « unlimited », jamais expirés par le système, retirés par le module) :
+     • Renverser : jusqu'à ce que la cible se relève (bouton « Se relever ») ;
+     • Bloquer avec maintien possible : jusqu'à ce que le lanceur relâche la prise ou rate son test de FOR.
+   - Désarmer : simple état, retiré par le bouton « Ramasser son arme ». */
+const PERSISTENT_EFFECT_UNIT = "unlimited";
+
+function getManoeuvreEffectUnit(manoeuvreId, options = {}) {
+  if (manoeuvreId === "renverser") return PERSISTENT_EFFECT_UNIT;
+  if (manoeuvreId === "bloquer" && options.canMaintainBlock) return PERSISTENT_EFFECT_UNIT;
+  return "round";
+}
+
+function findManoeuvreEffects(actor, manoeuvreId) {
+  return (actor?.system?.currentEffects ?? []).filter(effect =>
+    effect.slug?.startsWith("manoeuvre-") && effect.slug.includes(`-${manoeuvreId}`));
+}
+
+async function postManoeuvreNote(actor, text) {
+  await ChatMessage.create({
+    speaker: ChatMessage.getSpeaker({ actor }),
+    content: `<div class="mv-man-block-prompt">${escapeHtml(text)}</div>`
+  });
+}
+
+// Renverser : la cible consacre une action d'attaque pour se relever
+async function standUp(actor) {
+  if (!actor?.isOwner) {
+    ui.notifications.warn("Vous devez contrôler ce personnage pour le relever.");
+    return;
+  }
+  const effects = findManoeuvreEffects(actor, "renverser");
+  if (!effects.length && !actor.statuses?.has("manoeuvre-overturned")) {
+    ui.notifications.info(`${actor.name} n’est pas à terre.`);
+    return;
+  }
+  for (const effect of effects) await actor.deleteCustomEffect(effect);
+  if (actor.statuses?.has("manoeuvre-overturned")) {
+    await actor.activateCOStatusEffect({ state: false, effectid: "manoeuvre-overturned" });
+  }
+  await postManoeuvreNote(actor, `${actor.name} se relève (action d’attaque).`);
+}
+
+// Désarmer : la cible ramasse son arme quand elle le décide
+async function pickUpWeapon(actor) {
+  if (!actor?.isOwner) {
+    ui.notifications.warn("Vous devez contrôler ce personnage pour ramasser son arme.");
+    return;
+  }
+  if (!actor.statuses?.has("manoeuvre-desarmer")) {
+    ui.notifications.info(`${actor.name} n’est pas désarmé(e).`);
+    return;
+  }
+  await actor.activateCOStatusEffect({ state: false, effectid: "manoeuvre-desarmer" });
+  await postManoeuvreNote(actor, `${actor.name} ramasse son arme.`);
+}
+
+// Gêner (option malus) : -5 affiché dans le champ Malus de toute fenêtre d'attaque de la cible gênée
+const GENER_ATTACK_PENALTY = -5;
+const GENER_ATTACK_SLUG_SUFFIX = "-attaque";
+
+function hasGenerAttackPenalty(actor) {
+  return Boolean(actor?.system?.currentEffects?.some(effect =>
+    effect.slug?.startsWith("manoeuvre-") && effect.slug.endsWith(`-gener${GENER_ATTACK_SLUG_SUFFIX}`)));
+}
+
+function getHistoryKey(attackerTokenId, attackerActorId, targetTokenId, manoeuvreId) {
+  if (game.settings.get(MODULE_ID, "diminishingScope") === "target") return `any:${targetTokenId}:${manoeuvreId}`;
+  return `${attackerTokenId || attackerActorId}:${targetTokenId}:${manoeuvreId}`;
+}
+
+function getDiminishingReturnsCount(attackerTokenId, actor, targetToken, manoeuvreId) {
+  if (!game.combat?.started || !targetToken) return 0;
+  const history = game.combat.getFlag(MODULE_ID, "manoeuvreHistory") || {};
+  const key = getHistoryKey(attackerTokenId, actor.id, targetToken.id, manoeuvreId);
+  return Number(history.counts?.[key] || 0);
+}
+
+async function resolveStunSave(context) {
+  const targetActor = fromUuidSync(context.targetActorUuid);
+  if (!targetActor) throw new Error("Acteur cible introuvable pour le test de CON.");
+
+  const save = await targetActor.rollSkill("con", {
+    difficulty: context.stunDifficulty,
+    chatFlavor: `Résister à l’assommement — difficulté ${context.stunDifficulty}`,
+    withDialog: false
+  });
+  if (!save?.result?.isFailure || targetActor.statuses.has("unconscious")) return;
+
+  const durationRoll = await new Roll("1d6").evaluate();
+  await durationRoll.toMessage({ flavor: `Durée de l’assommement : ${durationRoll.total} minute(s)` });
+  const durationSeconds = Number(durationRoll.total) * 60;
+  const activated = await targetActor.activateCOStatusEffect({ state: true, effectid: "unconscious" });
+  if (activated === false) return;
+
+  const statusEffect = targetActor.effects.find(effect => effect.statuses?.has("unconscious"));
+  if (!statusEffect) throw new Error("Impossible de trouver l’effet temporaire Inconscient.");
+  await statusEffect.update({
+    "duration.seconds": durationSeconds,
+    "duration.startTime": game.time.worldTime
+  });
+}
+
+/* --- Suivi des prises de Bloquer (stocké dans le combat, écrit par le MJ actif) ---
+   Une entrée par prise : { active, lastRound, lastPromptRound, attacker…, target…, blockEffectSlug, sizeModifier }.
+   lastRound = round de la réussite initiale ou du dernier maintien réussi : la prise ne peut être
+   maintenue qu'au round suivant ; un round sans tentative la relâche. */
+const BLOCK_REGISTRY_FLAG = "activeBlocks";
+
+function getBlockKey(context) {
+  return context.blockKey || `${context.blockEffectSlug}:${context.targetTokenId}`;
+}
+
+function getBlockEntry(combat, key) {
+  return combat?.getFlag(MODULE_ID, BLOCK_REGISTRY_FLAG)?.[key] || null;
+}
+
+async function setBlockEntry(combat, key, data) {
+  if (!combat) return;
+  await combat.setFlag(MODULE_ID, BLOCK_REGISTRY_FLAG, { [key]: { ...(getBlockEntry(combat, key) || {}), ...data } });
+}
+
+function isBlockAttacker(entry, combatant) {
+  return Boolean((entry.attackerTokenId && entry.attackerTokenId === combatant?.tokenId)
+    || (combatant?.actor && entry.attackerActorUuid === combatant.actor.uuid));
+}
+
+// MJ uniquement : fin de la prise, l'état immobilisé est retiré de la cible
+async function releaseBlock(combat, key, reason = "") {
+  const entry = getBlockEntry(combat, key);
+  if (!entry?.active) return;
+  const targetActor = fromUuidSync(entry.targetActorUuid);
+  const effect = targetActor?.system?.currentEffects?.find(current => current.slug === entry.blockEffectSlug);
+  if (effect) await targetActor.deleteCustomEffect(effect);
+  await setBlockEntry(combat, key, { active: false });
+  if (reason) await postManoeuvreNote(fromUuidSync(entry.attackerActorUuid), reason);
+}
+
+// Bouton « Relâcher la prise » : exécuté par le MJ (directement ou via une requête du joueur)
+async function requestReleaseBlock(context, button) {
+  const attacker = fromUuidSync(context.attackerActorUuid);
+  if (!game.user.isGM && !attacker?.isOwner) {
+    ui.notifications.warn("Vous devez contrôler l’attaquant pour relâcher la prise.");
+    return;
+  }
+  const combatId = context.combatId || game.combat?.id;
+  const payload = { combatId, blockKey: getBlockKey(context) };
+  if (button) button.disabled = true;
+  try {
+    if (game.user.isGM) await handleReleaseBlockQuery(payload);
+    else if (game.users.activeGM) await game.users.activeGM.query(`${MODULE_ID}.releaseBlock`, payload);
+    else {
+      ui.notifications.warn("Un MJ doit être connecté pour relâcher la prise.");
+      if (button) button.disabled = false;
     }
-  } else if (manId === "repousser") {
-    if (payload.isCornered) {
-      const defMalus = -Math.abs(Number(payload.repousserDefMalus || 3));
-      await applyNativeStatus("manoeuvre-repousser", true, [
-        { key: "system.combat.def.bonuses.effects", mode: CONST.ACTIVE_EFFECT_MODES.ADD, value: String(defMalus) }
-      ]);
-    }
-  } else if (manId === "bloquer") {
-    await applyNativeStatus("immobilized", true);
-  } else if (manId === "desarmer") {
-    await applyNativeStatus("manoeuvre-desarmer", false);
-  } else if (manId === "aveugler") {
-    await applyNativeStatus("blind", true);
-  } else if (manId === "renverser") {
-    await applyNativeStatus("overturned", false);
-  } else if (manId === "etourdir") {
-    await applyNativeStatus("stun", true);
+  } catch (error) {
+    if (button) button.disabled = false;
+    console.error(`${MODULE_ID} | Échec du relâchement de la prise :`, error);
+    ui.notifications.error(`Échec du relâchement de la prise : ${error.message}`);
   }
 }
 
-async function applyManoeuvreOutcome(payload) {
-  const targetActor = resolveActorFromPayload(payload);
-  if (!targetActor) return;
+async function handleReleaseBlockQuery({ combatId, blockKey } = {}) {
+  const combat = game.combats.get(combatId);
+  const entry = getBlockEntry(combat, blockKey);
+  if (!entry?.active) return false;
+  const attacker = fromUuidSync(entry.attackerActorUuid);
+  const targetActor = fromUuidSync(entry.targetActorUuid);
+  await releaseBlock(combat, blockKey,
+    `${attacker?.name ?? "L’attaquant"} relâche sa prise : ${targetActor?.name ?? "la cible"} n’est plus immobilisé(e).`);
+  return true;
+}
 
-  if (targetActor.isOwner || game.user.isGM) {
-    await executeApplyManoeuvreOutcome(payload);
-  } else {
-    game.socket.emit(SOCKET_NAME, {
-      action: "applyManoeuvreOutcome",
-      payload
+async function resolveBlockMaintenance(context, result) {
+  const targetActor = fromUuidSync(context.targetActorUuid);
+  if (!targetActor) throw new Error("Acteur cible introuvable pour le maintien de la prise.");
+  const effect = targetActor.system.currentEffects.find(current => current.slug === context.blockEffectSlug);
+  const combat = game.combat;
+  const blockKey = getBlockKey(context);
+
+  if (!result.isSuccess) {
+    if (effect) await targetActor.deleteCustomEffect(effect);
+    if (combat?.id === context.combatId) await setBlockEntry(combat, blockKey, { active: false });
+    return;
+  }
+
+  if (!combat?.started || combat.id !== context.combatId) return;
+  await setBlockEntry(combat, blockKey, { active: true, lastRound: combat.round });
+  if (!effect && targetActor.statuses.has("immobilized")) return;
+
+  await targetActor.applyCustomEffect({
+    name: "Manœuvre : Bloquer",
+    source: getEffectSourceUuid(context.attackerActorUuid),
+    statuses: ["immobilized"],
+    unit: PERSISTENT_EFFECT_UNIT,
+    duration: "1",
+    startedAt: combat.round,
+    previousRound: combat.round,
+    remainingTurn: 1,
+    modifiers: [],
+    formula: "",
+    formulaType: "damage",
+    elementType: "",
+    slug: context.blockEffectSlug
+  });
+}
+
+// Lien direct jet ↔ manœuvre : le système passe l'objet d'attaque au hook, on y lit le contexte de la manœuvre
+Hooks.on("co.resultRollAttack", (item, options, rolls) => {
+  const context = item?.[MODULE_ID];
+  if (context && rolls?.[0]) rolls[0].options[MODULE_ID] = context;
+});
+
+function takePendingContext(roll) {
+  const actorId = roll?.options?.actorId;
+  const actionName = roll?.options?.actionName || roll?.options?.flavor;
+  if (!actorId || !actionName) return null;
+
+  const key = `${actorId}:${actionName}`;
+  const contexts = pendingManoeuvreRolls.get(key);
+  if (!contexts?.length) return null;
+
+  // Préfère le contexte de la même cible, sinon le plus ancien
+  const oppositeTarget = roll.options.oppositeTarget;
+  let index = contexts.findIndex(ctx => oppositeTarget && ctx.targetUuid === oppositeTarget);
+  if (index < 0) index = 0;
+  const [context] = contexts.splice(index, 1);
+  if (contexts.length === 0) pendingManoeuvreRolls.delete(key);
+  return context;
+}
+
+Hooks.on("preCreateChatMessage", message => {
+  const roll = message.rolls?.[0];
+  if (!roll) return;
+  const context = roll.options?.[MODULE_ID] || takePendingContext(roll);
+  if (!context) return;
+  message.updateSource({
+    [`flags.${MODULE_ID}.roll`]: context,
+    ...(context.hasTimedEffect ? { "system.effectsApplied": true } : {})
+  });
+});
+
+Hooks.on("updateChatMessage", async (message, changes) => {
+  const activeGM = game.users.activeGM;
+  const context = message.getFlag(MODULE_ID, "roll");
+  if (!game.user.isGM || activeGM?.id !== game.user.id || !context) return;
+
+  if (context.type === "block-maintenance") {
+    const result = changes["system.result"] || foundry.utils.getProperty(changes, "system.result");
+    const eventKey = `${message.id}:block-maintenance`;
+    if (!result || message.getFlag(MODULE_ID, "maintenanceResolved") || processingManoeuvreResults.has(eventKey)) return;
+    processingManoeuvreResults.add(eventKey);
+    try {
+      await message.setFlag(MODULE_ID, "maintenanceResolved", true);
+      await resolveBlockMaintenance(context, result);
+    } catch (error) {
+      console.error(`${MODULE_ID} | Échec du maintien de la prise :`, error);
+      ui.notifications.error(`Échec du maintien de la prise : ${error.message}`);
+    } finally {
+      processingManoeuvreResults.delete(eventKey);
+    }
+    return;
+  }
+
+  const updatedResults = changes["system.targetResults"] || foundry.utils.getProperty(changes, "system.targetResults");
+  if (!Array.isArray(updatedResults)) return;
+
+  const combat = game.combat?.started ? game.combat : null;
+  const history = combat
+    ? foundry.utils.deepClone(combat.getFlag(MODULE_ID, "manoeuvreHistory") || { counts: {}, events: {} })
+    : null;
+  if (history) {
+    history.counts ||= {};
+    history.events ||= {};
+  }
+
+  for (const result of updatedResults) {
+    if (result.needsOppositeRoll) continue;
+
+    const eventKey = `${message.id}:${context.targetTokenId}`;
+    if (history?.events[eventKey] || message.getFlag(MODULE_ID, "resolved")
+      || processingManoeuvreResults.has(eventKey)) continue;
+    processingManoeuvreResults.add(eventKey);
+
+    try {
+      await message.setFlag(MODULE_ID, "resolved", true);
+
+      // Filet de sécurité : si le système n'a pas posé l'effet de la manœuvre, on l'applique ici
+      if (result.isSuccess && context.hasTimedEffect && context.effectSlug) {
+        const targetActor = fromUuidSync(context.targetActorUuid);
+        const alreadyApplied = targetActor?.system?.currentEffects?.some(effect => effect.slug === context.effectSlug);
+        const customEffect = message.system?.customEffect;
+        if (targetActor && !alreadyApplied && customEffect) {
+          const effectData = typeof customEffect.toObject === "function" ? customEffect.toObject() : foundry.utils.deepClone(customEffect);
+          await targetActor.applyCustomEffect(effectData);
+        }
+      }
+
+      // Bloquer réussi en combat : on enregistre la prise pour proposer son maintien au tour suivant de l'attaquant
+      if (result.isSuccess && context.manoeuvreId === "bloquer" && context.canMaintainBlock
+        && combat && combat.id === context.combatId) {
+        await setBlockEntry(combat, getBlockKey(context), {
+          active: true,
+          lastRound: combat.round,
+          lastPromptRound: combat.round,
+          attackerActorUuid: context.attackerActorUuid,
+          attackerTokenId: context.attackerTokenId,
+          targetActorUuid: context.targetActorUuid,
+          targetTokenId: context.targetTokenId,
+          blockEffectSlug: context.blockEffectSlug,
+          sizeModifier: context.sizeModifier,
+          combatId: combat.id
+        });
+      }
+
+      if (result.isSuccess && context.manoeuvreId === "desarmer") {
+        const targetActor = canvas?.tokens?.get(context.targetTokenId)?.actor || fromUuidSync(result.uuid);
+        if (targetActor?.activateCOStatusEffect) {
+          await targetActor.activateCOStatusEffect({ state: true, effectid: "manoeuvre-desarmer" });
+        }
+      }
+
+      if (result.isSuccess && context.manoeuvreId === "etourdir" && context.stunSaveEligible
+        && !message.getFlag(MODULE_ID, "stunSaveAttempted")) {
+        await message.setFlag(MODULE_ID, "stunSaveAttempted", true);
+        await resolveStunSave(context);
+      }
+
+      if (history) {
+        const historyKey = getHistoryKey(
+          context.attackerTokenId,
+          context.attackerActorId,
+          context.targetTokenId,
+          context.manoeuvreId
+        );
+        history.counts[historyKey] = Number(history.counts[historyKey] || 0) + 1;
+        history.events[eventKey] = true;
+        await combat.setFlag(MODULE_ID, "manoeuvreHistory", history);
+      }
+    } catch (error) {
+      console.error(`${MODULE_ID} | Échec de la résolution d'une manœuvre :`, error);
+      ui.notifications.error(`Échec de la résolution d'une manœuvre : ${error.message}`);
+    } finally {
+      processingManoeuvreResults.delete(eventKey);
+    }
+  }
+});
+
+async function maintainBlock(message, context, button) {
+  const combat = game.combat;
+  if (!combat?.started || combat.id !== context.combatId || combat.round <= context.blockStartRound) {
+    ui.notifications.warn("Vous pourrez tenter de maintenir la prise à partir du prochain round.");
+    return;
+  }
+
+  const usedRounds = message.getFlag(MODULE_ID, "maintenanceRounds") || [];
+  if (usedRounds.includes(combat.round)) {
+    ui.notifications.warn("Une tentative de maintien a déjà été lancée ce round.");
+    return;
+  }
+
+  const blockKey = getBlockKey(context);
+  const entry = getBlockEntry(combat, blockKey);
+  if (entry) {
+    if (!entry.active || entry.lastRound < combat.round - 1) {
+      ui.notifications.warn("La prise a été relâchée : elle ne peut plus être maintenue.");
+      return;
+    }
+    if (entry.lastRound >= combat.round) {
+      ui.notifications.warn("La prise a déjà été maintenue ce round.");
+      return;
+    }
+  }
+
+  const attacker = fromUuidSync(context.attackerActorUuid);
+  const targetActor = fromUuidSync(context.targetActorUuid);
+  const targetToken = canvas?.tokens?.get(context.targetTokenId);
+  if (!attacker || !targetActor || !attacker.isOwner && !game.user.isGM) {
+    ui.notifications.warn("Vous devez contrôler l’attaquant pour maintenir la prise.");
+    return;
+  }
+
+  const lockKey = `${message.id}:${combat.id}:${combat.round}`;
+  if (processingManoeuvreResults.has(lockKey)) return;
+  processingManoeuvreResults.add(lockKey);
+  button.disabled = true;
+
+  const nextUsedRounds = [...usedRounds, combat.round];
+  const actionName = "Maintenir une prise — Manœuvre";
+  const pendingKey = `${attacker.id}:${actionName}`;
+  const metadata = {
+    type: "block-maintenance",
+    attackerActorUuid: attacker.uuid,
+    attackerTokenId: context.attackerTokenId || null,
+    targetActorUuid: targetActor.uuid,
+    targetTokenId: context.targetTokenId,
+    targetUuid: targetActor.uuid,
+    oppositeValue: "@oppose.for",
+    blockEffectSlug: context.blockEffectSlug,
+    blockKey,
+    combatId: combat.id
+  };
+  const pending = pendingManoeuvreRolls.get(pendingKey) || [];
+  pending.push(metadata);
+  pendingManoeuvreRolls.set(pendingKey, pending);
+
+  try {
+    const roll = await attacker.rollSkill("for", {
+      difficulty: "@oppose.for",
+      oppositeRoll: true,
+      targets: [{
+        actor: targetActor,
+        token: targetToken,
+        uuid: targetActor.uuid,
+        name: targetActor.name
+      }],
+      bonus: Math.max(0, context.sizeModifier || 0),
+      malus: Math.min(0, context.sizeModifier || 0),
+      chatFlavor: actionName
+    });
+    // Le message de rappel appartient au MJ : un joueur ne peut pas y écrire (le suivi du combat suffit alors)
+    if (roll && message.isOwner) await message.setFlag(MODULE_ID, "maintenanceRounds", nextUsedRounds);
+    else if (!roll) button.disabled = false;
+  } catch (error) {
+    button.disabled = false;
+    console.error(`${MODULE_ID} | Échec du test de maintien :`, error);
+    ui.notifications.error(`Échec du test de maintien : ${error.message}`);
+  } finally {
+    const remaining = pendingManoeuvreRolls.get(pendingKey);
+    if (remaining) {
+      const index = remaining.indexOf(metadata);
+      if (index >= 0) remaining.splice(index, 1);
+      if (remaining.length === 0) pendingManoeuvreRolls.delete(pendingKey);
+    }
+    processingManoeuvreResults.delete(lockKey);
+  }
+}
+
+async function removeManoeuvreEffect(context, button) {
+  const targetActor = fromUuidSync(context.targetActorUuid);
+  const effect = targetActor?.system?.currentEffects?.find(current => current.slug === context.effectSlug);
+  if (!effect) {
+    ui.notifications.info("L’effet de cette manœuvre n’est plus actif sur la cible.");
+    button.disabled = true;
+    return;
+  }
+  button.disabled = true;
+  try {
+    await targetActor.deleteCustomEffect(effect);
+    ui.notifications.info(`Effet « ${effect.name} » retiré de ${targetActor.name}.`);
+  } catch (error) {
+    button.disabled = false;
+    console.error(`${MODULE_ID} | Échec du retrait de l'effet :`, error);
+    ui.notifications.error(`Échec du retrait de l’effet : ${error.message}`);
+  }
+}
+
+/* --- Rappels de début de tour pour les états persistants (Désarmer, Renverser) --- */
+function isActorProne(actor) {
+  return Boolean(actor?.statuses?.has("manoeuvre-overturned") || findManoeuvreEffects(actor, "renverser").length > 0);
+}
+
+function isActorDisarmed(actor) {
+  return Boolean(actor?.statuses?.has("manoeuvre-desarmer"));
+}
+
+const CONDITION_PROMPTS = {
+  "pickup-prompt": {
+    isActive: isActorDisarmed,
+    icon: "fa-hand-paper",
+    title: "Désarmé(e) — ramasser son arme ?",
+    text: name => `${name} peut ramasser son arme tombée au sol.`,
+    buttonLabel: "Ramasser son arme",
+    action: pickUpWeapon
+  },
+  "standup-prompt": {
+    isActive: isActorProne,
+    icon: "fa-person-falling",
+    title: "À terre — se relever ?",
+    text: name => `${name} est à terre (-5 DEF). Se relever demande une action d’attaque.`,
+    buttonLabel: "Se relever (action d’attaque)",
+    action: standUp
+  }
+};
+
+// Un seul rappel par combattant, par état et par round (le hook peut se déclencher plusieurs fois pour un même tour)
+const conditionPromptsSent = new Set();
+
+async function promptConditionActions(combat, combatant) {
+  const actor = combatant.actor;
+  if (!actor) return;
+  for (const [type, prompt] of Object.entries(CONDITION_PROMPTS)) {
+    if (!prompt.isActive(actor)) continue;
+    const promptKey = `${combat.id}:${combat.round}:${combatant.id}:${type}`;
+    if (conditionPromptsSent.has(promptKey)) continue;
+    conditionPromptsSent.add(promptKey);
+
+    const whisper = game.users
+      .filter(user => user.isGM || actor.testUserPermission(user, "OWNER"))
+      .map(user => user.id);
+    await ChatMessage.create({
+      speaker: ChatMessage.getSpeaker({ actor, token: combatant.token }),
+      whisper,
+      content: `<div class="mv-man-block-prompt"><strong><i class="fas ${prompt.icon}"></i> ${escapeHtml(prompt.title)}</strong>`
+        + `<div>${escapeHtml(prompt.text(actor.name))}</div></div>`,
+      flags: { [MODULE_ID]: { roll: { type, targetActorUuid: actor.uuid, round: combat.round, combatId: combat.id } } }
     });
   }
 }
 
-Hooks.once("ready", () => {
-  game.socket.on(SOCKET_NAME, async (data) => {
-    if (!game.user.isGM) return;
-    const activeGM = game.users.activeGM;
-    if (activeGM && activeGM.id !== game.user.id) return;
+// Changement de tour : fin des prises non maintenues, puis rappel de maintien au début du tour du lanceur
+Hooks.on("updateCombat", async (combat, changed) => {
+  if (!("turn" in changed) && !("round" in changed)) return;
+  if (game.users.activeGM?.id !== game.user.id || !combat.started) return;
+  const combatant = combat.combatant;
+  if (!combatant?.actor) return;
 
-    if (data?.action === "applyManoeuvreOutcome" && data.payload) {
-      await executeApplyManoeuvreOutcome(data.payload);
+  // Désarmé / à terre : au début de son tour, on propose de ramasser l'arme / de se relever
+  try {
+    await promptConditionActions(combat, combatant);
+  } catch (error) {
+    console.error(`${MODULE_ID} | Échec des rappels de début de tour :`, error);
+  }
+
+  const registry = combat.getFlag(MODULE_ID, BLOCK_REGISTRY_FLAG) || {};
+  for (const [key, entry] of Object.entries(registry)) {
+    if (!entry?.active || entry.combatId !== combat.id) continue;
+    const attacker = fromUuidSync(entry.attackerActorUuid);
+    const targetActor = fromUuidSync(entry.targetActorUuid);
+    const attackerName = attacker?.name ?? "L’attaquant";
+    const targetName = targetActor?.name ?? "la cible";
+
+    try {
+      if (!attacker || !targetActor) {
+        await releaseBlock(combat, key);
+        continue;
+      }
+
+      // Le tour du lanceur est passé sans maintien réussi (ou il n'a jamais rejoué) : prise relâchée
+      const promptMissed = entry.lastRound < entry.lastPromptRound && !isBlockAttacker(entry, combatant);
+      const stale = entry.lastRound < combat.round - 1;
+      if (promptMissed || stale) {
+        await releaseBlock(combat, key, `${attackerName} n’a pas maintenu sa prise : ${targetName} n’est plus immobilisé(e).`);
+        continue;
+      }
+
+      if (!isBlockAttacker(entry, combatant) || entry.lastPromptRound === combat.round) continue;
+
+      await setBlockEntry(combat, key, { lastPromptRound: combat.round });
+      const whisper = game.users
+        .filter(user => user.isGM || attacker.testUserPermission(user, "OWNER"))
+        .map(user => user.id);
+      await ChatMessage.create({
+        speaker: ChatMessage.getSpeaker({ actor: attacker }),
+        whisper,
+        content: `<div class="mv-man-block-prompt"><strong><i class="fas fa-hand-rock"></i> Bloquer — maintenir la prise ?</strong>`
+          + `<div>${escapeHtml(attackerName)} peut maintenir sa prise sur ${escapeHtml(targetName)} : `
+          + `test opposé de FOR (action limitée). En cas d’échec, de refus ou sans tentative ce tour-ci, la prise est relâchée.</div></div>`,
+        flags: {
+          [MODULE_ID]: {
+            roll: { ...entry, type: "block-prompt", blockKey: key, blockStartRound: entry.lastRound, canMaintainBlock: true }
+          }
+        }
+      });
+    } catch (error) {
+      console.error(`${MODULE_ID} | Échec du suivi de la prise :`, error);
     }
+  }
+});
+
+function appendActionButton(container, label, onClick, extraClass = "") {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = `mv-man-maintain-btn ${extraClass}`.trim();
+  button.textContent = label;
+  button.addEventListener("click", event => {
+    event.preventDefault();
+    event.stopPropagation();
+    onClick(button);
   });
-});
-
-Hooks.on("combatTurnChange", async (combat, prior, current) => {
-  if (!game.user.isGM) return;
-  const activeGM = game.users.activeGM;
-  if (activeGM && activeGM.id !== game.user.id) return;
-
-  const currentCombatant = combat.combatant;
-  if (!currentCombatant) return;
-
-  for (const combatant of combat.combatants) {
-    const actor = combatant.actor;
-    if (!actor) continue;
-
-    const toDelete = [];
-    const expiredSlugs = new Set();
-
-    for (const effect of actor.effects) {
-      const expiry = effect.getFlag(MODULE_ID, "expiry");
-      if (!expiry) continue;
-      if (expiry.combatId !== combat.id) continue;
-      if (expiry.attackerCombatantId !== currentCombatant.id) continue;
-
-      const isLaterTurn =
-        (combat.round > expiry.createdRound) ||
-        (combat.round === expiry.createdRound && combat.turn > expiry.createdTurn);
-
-      if (isLaterTurn) {
-        toDelete.push(effect.id);
-        const manId = effect.getFlag(MODULE_ID, "appliedManoeuvre");
-        if (manId) expiredSlugs.add("manoeuvre-" + manId);
-      }
-    }
-
-    if (toDelete.length > 0) {
-      await actor.deleteEmbeddedDocuments("ActiveEffect", toDelete);
-    }
-
-    if (expiredSlugs.size > 0 && Array.isArray(actor.system?.currentEffects)) {
-      const cleaned = actor.system.currentEffects.filter(ce => !expiredSlugs.has(ce.slug));
-      await actor.update({ "system.currentEffects": cleaned });
-    }
-  }
-});
-
-Hooks.on("deleteCombat", async (combat) => {
-  if (!game.user.isGM) return;
-  const activeGM = game.users.activeGM;
-  if (activeGM && activeGM.id !== game.user.id) return;
-
-  for (const combatant of combat.combatants) {
-    const actor = combatant.actor;
-    if (!actor) continue;
-
-    const toDelete = [];
-    const expiredSlugs = new Set();
-
-    for (const effect of actor.effects) {
-      const expiry = effect.getFlag(MODULE_ID, "expiry");
-      if (expiry && expiry.combatId === combat.id) {
-        toDelete.push(effect.id);
-        const manId = effect.getFlag(MODULE_ID, "appliedManoeuvre");
-        if (manId) expiredSlugs.add("manoeuvre-" + manId);
-      }
-    }
-
-    if (toDelete.length > 0) {
-      await actor.deleteEmbeddedDocuments("ActiveEffect", toDelete);
-    }
-
-    if (expiredSlugs.size > 0 && Array.isArray(actor.system?.currentEffects)) {
-      const cleaned = actor.system.currentEffects.filter(ce => !expiredSlugs.has(ce.slug));
-      await actor.update({ "system.currentEffects": cleaned });
-    }
-  }
-});
-
-/* ==========================================================================
-   5. BOÎTE DE DIALOGUE DE L'ATTAQUANT ET JET DE MANŒUVRE
-   ========================================================================== */
-
-async function rollManoeuvre(actor, manoeuvre) {
-  const chaBonus = manoeuvre.useCha ? getActorChaMod(actor) : 0;
-  const targetToken = game.user?.targets?.first() || null;
-  const inCombatWithTarget = Boolean(game.combat && targetToken);
-  const autoPriorCount = inCombatWithTarget ? getDiminishingReturnsCount(actor, targetToken, manoeuvre.id) : 0;
-  const diminishingPenalty = inCombatWithTarget ? -5 * autoPriorCount : 0;
-  const extraBonuses = getManoeuvreItemAndEffectBonuses(actor, manoeuvre);
-  const attackerForMod = getActorAbilityTotal(actor, "for");
-  const repousserDistance = attackerForMod + 3;
-
-  const repetitionLineHtml = autoPriorCount > 0
-    ? '<div class="mv-man-repetition-info">' +
-        '<i class="fas fa-redo-alt"></i> ' +
-        '<span>Répétitions sur cette cible : <strong>' + autoPriorCount + '</strong> (' + diminishingPenalty + ')</span>' +
-      '</div>'
-    : "";
-
-  let extraFieldsHtml = "";
-  if (manoeuvre.id === "gener") {
-    extraFieldsHtml +=
-      '<div class="mv-man-row-opt">' +
-        '<label>Effet si réussite :</label>' +
-        '<select name="generChoice">' +
-          '<option value="slowed">Cible ralentie (1 action M ou A)</option>' +
-          '<option value="attackPenalty">Malus de -5 en attaque</option>' +
-        '</select>' +
-      '</div>';
-  }
-  if (manoeuvre.id === "repousser") {
-    extraFieldsHtml +=
-      '<label class="mv-man-opt">' +
-        '<input type="checkbox" name="isCornered"/> Cible acculée (perd ' + repousserDistance + ' en DEF pendant 1 round)' +
-      '</label>';
-  }
-  if (manoeuvre.id === "renverser") {
-    extraFieldsHtml +=
-      '<label class="mv-man-opt">' +
-        '<input type="checkbox" name="isQuadruped"/> Cible quadrupède (malus -10 au lieu de -5)' +
-      '</label>';
-  }
-  if (manoeuvre.sizeSensitive) {
-    extraFieldsHtml +=
-      '<div class="mv-man-row-opt">' +
-        '<label>Différence de taille (*):</label>' +
-        '<select name="sizeDiff">' +
-          '<option value="0">Même taille (0)</option>' +
-          '<option value="5">Cible 1 catégorie plus grande (+5)</option>' +
-          '<option value="10">Cible 2 catégories plus grandes (+10)</option>' +
-          '<option value="-5">Cible 1 catégorie plus petite (-5)</option>' +
-          '<option value="-10">Cible 2 catégories plus petites (-10)</option>' +
-        '</select>' +
-      '</div>';
-  }
-
-  const targetImg = targetToken?.document?.texture?.src || targetToken?.actor?.img || "";
-  const targetHeadHtml = targetToken && targetImg
-    ? '<div class="mv-man-roll-target">' +
-        '<span class="mv-man-roll-target-name" title="Cible : ' + targetToken.name + '">' + targetToken.name + '</span>' +
-        '<img src="' + targetImg + '" width="36" height="36" title="Cible : ' + targetToken.name + '"/>' +
-      '</div>'
-    : "";
-
-  const content =
-    '<div class="mv-man-roll-dialog">' +
-      '<div class="mv-man-roll-head">' +
-        '<img src="' + manoeuvre.img + '" width="36" height="36"/>' +
-        '<div><strong>' + manoeuvre.name + '</strong></div>' +
-        targetHeadHtml +
-      '</div>' +
-      '<div class="mv-man-formula-box">' +
-        '<span class="mv-man-formula-label">Jet calculé :</span>' +
-        '<span class="mv-man-formula-text">1d20</span>' +
-      '</div>' +
-      repetitionLineHtml +
-      '<div class="mv-man-row-opt">' +
-        '<label>Modificateur circonstanciel :</label>' +
-        '<input type="number" name="situational" value="0" step="1"/>' +
-      '</div>' +
-      '<div class="mv-man-row-opt">' +
-        '<label>Type de test d\'attaque :</label>' +
-        '<select name="attackType">' +
-          '<option value="melee">Attaque au contact (FOR)</option>' +
-          '<option value="finesse">Attaque au contact en finesse (AGI)</option>' +
-          '<option value="ranged">Attaque à distance (AGI)</option>' +
-          '<option value="magic">Attaque magique</option>' +
-        '</select>' +
-      '</div>' +
-      extraFieldsHtml +
-    '</div>';
-
-  const DialogImpl = foundry?.appv1?.api?.Dialog || Dialog;
-  const RollImpl = foundry?.dice?.Roll || Roll;
-  const escapeAttr = (str) => String(str || "").replace(/"/g, "&quot;");
-
-  const computeRollBreakdown = (dlgEl) => {
-    const attackType = dlgEl?.querySelector('[name="attackType"]')?.value || "melee";
-    const baseAttack = getActorAttackBonusByType(actor, attackType);
-    const attackLabels = {
-      melee: "Contact",
-      finesse: "Contact finesse",
-      ranged: "Distance",
-      magic: "Magique"
-    };
-
-    let mod = manoeuvre.modValue;
-    if (manoeuvre.id === "renverser" && dlgEl?.querySelector('[name="isQuadruped"]')?.checked) {
-      mod = -10;
-    }
-
-    const sizeDiff = Number(dlgEl?.querySelector('[name="sizeDiff"]')?.value || 0);
-    const situational = Number(dlgEl?.querySelector('[name="situational"]')?.value || 0);
-    const totalBonus = baseAttack + mod + chaBonus + extraBonuses.total + diminishingPenalty + sizeDiff + situational;
-
-    const fmt = (n) => (n >= 0 ? "+ " + n : "- " + Math.abs(n));
-    const makeTokenHtml = (val, label) =>
-      '<span class="mv-man-formula-token" data-tooltip="' + escapeAttr(label) + '">' + fmt(val) + '</span>';
-
-    const formulaHtmlTokens = ['<span>1d20</span>', makeTokenHtml(baseAttack, attackLabels[attackType])];
-    const detailsParts = [attackLabels[attackType] + " " + (baseAttack >= 0 ? "+" : "") + baseAttack];
-
-    if (mod !== 0) {
-      formulaHtmlTokens.push(makeTokenHtml(mod, "Manœuvre (" + manoeuvre.name + ")"));
-      detailsParts.push("Manœuvre " + (mod >= 0 ? "+" : "") + mod);
-    }
-    if (manoeuvre.useCha) {
-      formulaHtmlTokens.push(makeTokenHtml(chaBonus, "Charisme (CHA)"));
-      detailsParts.push("CHA " + (chaBonus >= 0 ? "+" : "") + chaBonus);
-    }
-    if (extraBonuses.sources.length > 0) {
-      formulaHtmlTokens.push(makeTokenHtml(extraBonuses.total, extraBonuses.sources.join(" | ")));
-      detailsParts.push(...extraBonuses.sources);
-    }
-    if (diminishingPenalty !== 0) {
-      formulaHtmlTokens.push(makeTokenHtml(diminishingPenalty, "Rendements décroissants (" + autoPriorCount + " répétition(s))"));
-      detailsParts.push("Rendements décroissants " + diminishingPenalty);
-    }
-    if (sizeDiff !== 0) {
-      formulaHtmlTokens.push(makeTokenHtml(sizeDiff, "Différence de taille"));
-      detailsParts.push("Taille " + (sizeDiff >= 0 ? "+" : "") + sizeDiff);
-    }
-    if (situational !== 0) {
-      formulaHtmlTokens.push(makeTokenHtml(situational, "Modificateur circonstanciel"));
-      detailsParts.push("Circonstance " + (situational >= 0 ? "+" : "") + situational);
-    }
-
-    return {
-      totalBonus,
-      formula: "1d20 + " + totalBonus,
-      previewHtml: formulaHtmlTokens.join(" "),
-      detailsParts
-    };
-  };
-
-  let dialogRoot = null;
-
-  new DialogImpl(
-    {
-      title: "Manœuvre : " + manoeuvre.name,
-      content,
-      render: (html) => {
-        dialogRoot = resolveHtmlElement(html);
-        if (!dialogRoot) return;
-        const formulaTextEl = dialogRoot.querySelector(".mv-man-formula-text");
-        const updateFormulaPreview = () => {
-          if (!formulaTextEl) return;
-          formulaTextEl.innerHTML = computeRollBreakdown(dialogRoot).previewHtml;
-        };
-        dialogRoot.querySelectorAll("select, input").forEach(el => {
-          el.addEventListener("change", updateFormulaPreview);
-          el.addEventListener("input", updateFormulaPreview);
-        });
-        updateFormulaPreview();
-      },
-      buttons: {
-        roll: {
-          icon: '<i class="fas fa-dice-d20"></i>',
-          label: "Lancer le test opposé",
-          callback: async (html) => {
-            try {
-              const dlgEl = dialogRoot || resolveHtmlElement(html);
-              const breakdown = computeRollBreakdown(dlgEl);
-              const roll = await new RollImpl(breakdown.formula).evaluate();
-              const generChoice = dlgEl?.querySelector('[name="generChoice"]')?.value || "slowed";
-              const isCornered = Boolean(dlgEl?.querySelector('[name="isCornered"]')?.checked);
-              const targetLine = targetToken ? " — Cible : " + targetToken.name : "";
-
-              const chatContent =
-                '<div class="mv-man-chat-card">' +
-                  '<div class="mv-man-chat-header">' +
-                    '<img src="' + manoeuvre.img + '" width="32" height="32"/>' +
-                    '<div>' +
-                      '<h4>Manœuvre : ' + manoeuvre.name + ' (' + manoeuvre.modifierLabel + ')' + targetLine + '</h4>' +
-                      '<span class="mv-man-chat-sub">' + breakdown.detailsParts.join(" | ") + '</span>' +
-                    '</div>' +
-                  '</div>' +
-                  '<div class="mv-man-chat-desc">' + manoeuvre.description + '</div>' +
-                  '<div class="mv-man-oppose-zone">' +
-                    '<button type="button" class="mv-man-oppose-btn"><i class="fas fa-shield-alt"></i> Lancer le test opposé</button>' +
-                  '</div>' +
-                '</div>';
-
-              await roll.toMessage({
-                speaker: ChatMessage.getSpeaker({ actor }),
-                flavor: chatContent,
-                flags: {
-                  [MODULE_ID]: {
-                    opposedData: {
-                      attackerActorId: actor.id,
-                      attackerName: actor.name,
-                      attackerTotal: roll.total,
-                      manoeuvreId: manoeuvre.id,
-                      manoeuvreName: manoeuvre.name,
-                      manoeuvreImg: manoeuvre.img,
-                      generChoice,
-                      isCornered,
-                      repousserDefMalus: repousserDistance,
-                      targetTokenId: targetToken?.id || null,
-                      targetActorId: targetToken?.actor?.id || null,
-                      targetName: targetToken?.name || "Défenseur",
-                      resolved: false
-                    }
-                  }
-                }
-              });
-            } catch (err) {
-              console.error(MODULE_ID + " | Erreur lors du jet de manœuvre :", err);
-              ui.notifications.error("Erreur lors du jet de manœuvre : " + err.message);
-            }
-          }
-        },
-        cancel: { icon: '<i class="fas fa-times"></i>', label: "Annuler" }
-      },
-      default: "roll"
-    },
-    { classes: ["dialog", "mv-man-dialog"], width: 460 }
-  ).render(true);
+  container.append(button);
+  return button;
 }
 
-/* ==========================================================================
-   6. BOÎTE DE DIALOGUE DU DÉFENSEUR ET RÉSOLUTION DU TEST OPPOSÉ
-   ========================================================================== */
-
-async function openOpposedManoeuvreDialog(message, opposedData, clickedBtn = null) {
-  let defenderActor = null;
-  let defenderTokenId = opposedData.targetTokenId || null;
-
-  if (defenderTokenId && canvas?.tokens) {
-    const tok = canvas.tokens.get(defenderTokenId);
-    defenderActor = tok?.actor || null;
-  }
-  if (!defenderActor && opposedData.targetActorId) {
-    defenderActor = game.actors.get(opposedData.targetActorId) || null;
-  }
-  if (!defenderActor) {
-    const controlledTok = canvas?.tokens?.controlled?.at?.(0);
-    if (controlledTok) {
-      defenderActor = controlledTok.actor;
-      defenderTokenId = controlledTok.id;
-    } else {
-      defenderActor = game.user?.character || null;
-    }
-  }
-
-  const defenderName = defenderActor?.name || opposedData.targetName || "Défenseur";
-
-  const content =
-    '<div class="mv-man-roll-dialog">' +
-      '<div class="mv-man-roll-head">' +
-        '<img src="' + (opposedData.manoeuvreImg || "icons/svg/shield.svg") + '" width="36" height="36"/>' +
-        '<div>' +
-          '<strong>Test opposé : ' + opposedData.manoeuvreName + '</strong>' +
-          '<div class="mv-man-chat-sub">Score à égaler ou battre : <strong>' + opposedData.attackerTotal + '</strong> (' + opposedData.attackerName + ')</div>' +
-        '</div>' +
-      '</div>' +
-      '<div class="mv-man-row-opt">' +
-        '<label>Test d\'attaque du défenseur :</label>' +
-        '<select name="defAttackType">' +
-          '<option value="melee">Attaque au contact (FOR)</option>' +
-          '<option value="finesse">Attaque au contact en finesse (AGI)</option>' +
-          '<option value="ranged">Attaque à distance (AGI)</option>' +
-          '<option value="magic">Attaque magique</option>' +
-        '</select>' +
-      '</div>' +
-      '<div class="mv-man-row-opt">' +
-        '<label>Modificateur circonstanciel :</label>' +
-        '<input type="number" name="defSituational" value="0" step="1"/>' +
-      '</div>' +
-    '</div>';
-
-  const DialogImpl = foundry?.appv1?.api?.Dialog || Dialog;
-  const RollImpl = foundry?.dice?.Roll || Roll;
-  let dialogRoot = null;
-
-  new DialogImpl(
-    {
-      title: "Réponse au test opposé — " + defenderName,
-      content,
-      render: (html) => { dialogRoot = resolveHtmlElement(html); },
-      buttons: {
-        roll: {
-          icon: '<i class="fas fa-dice-d20"></i>',
-          label: "Lancer la défense",
-          callback: async (html) => {
-            try {
-              const dlgEl = dialogRoot || resolveHtmlElement(html);
-              if (!dlgEl) return;
-
-              const defType = dlgEl.querySelector('[name="defAttackType"]')?.value || "melee";
-              const defSit = Number(dlgEl.querySelector('[name="defSituational"]')?.value || 0);
-              const baseDef = defenderActor ? getActorAttackBonusByType(defenderActor, defType) : 0;
-              const labels = { melee: "Contact", finesse: "Contact finesse", ranged: "Distance", magic: "Magique" };
-
-              const roll = await new RollImpl("1d20 + " + (baseDef + defSit)).evaluate();
-              const attackerWins = Number(opposedData.attackerTotal) > roll.total;
-              const outcomeClass = attackerWins ? "mv-man-outcome-success" : "mv-man-outcome-fail";
-              const outcomeText = attackerWins
-                ? "Manœuvre réussie ! (" + opposedData.attackerName + " " + opposedData.attackerTotal + " vs " + defenderName + " " + roll.total + ") — Effet appliqué à " + defenderName
-                : "Manœuvre repoussée ! (" + opposedData.attackerName + " " + opposedData.attackerTotal + " vs " + defenderName + " " + roll.total + ")";
-
-              const subParts = [labels[defType] + " " + (baseDef >= 0 ? "+" : "") + baseDef];
-              if (defSit !== 0) subParts.push("Circonstance " + (defSit >= 0 ? "+" : "") + defSit);
-
-              const replyContent =
-                '<div class="mv-man-chat-card">' +
-                  '<div class="mv-man-chat-header">' +
-                    '<img src="' + (opposedData.manoeuvreImg || "icons/svg/shield.svg") + '" width="32" height="32"/>' +
-                    '<div><h4>Opposition : ' + opposedData.manoeuvreName + '</h4><span class="mv-man-chat-sub">' + subParts.join(" | ") + '</span></div>' +
-                  '</div>' +
-                  '<div class="mv-man-outcome ' + outcomeClass + '">' + outcomeText + '</div>' +
-                '</div>';
-
-              await roll.toMessage({
-                speaker: defenderActor ? ChatMessage.getSpeaker({ actor: defenderActor }) : ChatMessage.getSpeaker({ alias: defenderName }),
-                flavor: replyContent
-              });
-
-              if (game.combat && opposedData.attackerActorId && defenderTokenId) {
-                const attackerActor = game.actors.get(opposedData.attackerActorId);
-                const defToken = canvas?.tokens?.get(defenderTokenId);
-                if (attackerActor && defToken) await incrementDiminishingReturnsCount(attackerActor, defToken, opposedData.manoeuvreId);
-              }
-
-              if (attackerWins && (defenderTokenId || defenderActor)) {
-                await applyManoeuvreOutcome({
-                  attackerActorId: opposedData.attackerActorId || null,
-                  manoeuvreId: opposedData.manoeuvreId,
-                  generChoice: opposedData.generChoice || "slowed",
-                  isCornered: Boolean(opposedData.isCornered),
-                  repousserDefMalus: Number(opposedData.repousserDefMalus || 3),
-                  targetTokenId: defenderTokenId,
-                  targetActorId: defenderActor?.id || opposedData.targetActorId || null
-                });
-              }
-
-              if (clickedBtn) {
-                clickedBtn.disabled = true;
-                clickedBtn.innerHTML = '<i class="fas fa-check"></i> Test opposé effectué';
-              }
-
-              if (message && (game.user.isGM || message.isAuthor)) {
-                const updatedData = foundry.utils.deepClone(opposedData);
-                updatedData.resolved = true;
-                await message.setFlag(MODULE_ID, "opposedData", updatedData);
-              }
-            } catch (err) {
-              console.error(MODULE_ID + " | Erreur lors du jet d'opposition :", err);
-              ui.notifications.error("Erreur lors du jet d'opposition : " + err.message);
-            }
-          }
-        },
-        cancel: { icon: '<i class="fas fa-times"></i>', label: "Annuler" }
-      },
-      default: "roll"
-    },
-    { classes: ["dialog", "mv-man-dialog"], width: 440 }
-  ).render(true);
+function appendMaintainButton(container, message, context) {
+  const row = document.createElement("div");
+  row.className = "mv-man-btn-row";
+  const maintain = appendActionButton(row, "Maintenir la prise (test opposé de FOR)",
+    button => maintainBlock(message, context, button));
+  const release = appendActionButton(row, "Relâcher la prise",
+    button => requestReleaseBlock(context, button), "mv-man-release-btn");
+  container.append(row);
+  return { maintain, release };
 }
 
-const syncOpposedChatButtonState = (message, html) => {
-  const opposedData = message?.getFlag?.(MODULE_ID, "opposedData");
-  if (!opposedData) return;
+
+Hooks.on("renderChatMessageHTML", (message, html) => {
+  const context = message.getFlag(MODULE_ID, "roll");
+  const conditionPrompt = CONDITION_PROMPTS[context?.type];
+  if (conditionPrompt) {
+    const actor = fromUuidSync(context.targetActorUuid);
+    if (!actor?.isOwner) return;
+    const root = resolveHtmlElement(html);
+    const content = root?.querySelector(".message-content") || root;
+    if (!content || content.querySelector(".mv-man-maintain-btn")) return;
+    const button = appendActionButton(content, conditionPrompt.buttonLabel, async btn => {
+      btn.disabled = true;
+      await conditionPrompt.action(actor);
+    });
+    // État déjà levé (arme ramassée, cible relevée) : bouton inactif
+    if (!conditionPrompt.isActive(actor)) button.disabled = true;
+    return;
+  }
+  if (context?.type === "block-prompt") {
+    const attacker = fromUuidSync(context.attackerActorUuid);
+    if (!game.user.isGM && !attacker?.isOwner) return;
+    const root = resolveHtmlElement(html);
+    const content = root?.querySelector(".message-content") || root;
+    if (!content || content.querySelector(".mv-man-maintain-btn")) return;
+    const entry = getBlockEntry(game.combat, context.blockKey);
+    // Le rappel n'est valable que pendant le round qui suit la dernière prise réussie (revérifié au clic)
+    const stillOpen = Boolean(entry?.active && entry.lastRound === context.blockStartRound
+      && game.combat?.round === context.blockStartRound + 1);
+    const { maintain, release } = appendMaintainButton(content, message, context);
+    if (!stillOpen) maintain.disabled = release.disabled = true;
+    return;
+  }
+  if (!context || context.type !== "maneuver") return;
+  const results = message.system?.targetResults;
+  if (!Array.isArray(results)) return;
+  const result = results.find(targetResult => targetResult.uuid === context.targetActorUuid) || results[0];
+  if (!result || result.needsOppositeRoll || !result.isSuccess) return;
+
   const root = resolveHtmlElement(html);
-  const btn = root?.querySelector?.(".mv-man-oppose-btn");
-  if (btn && opposedData.resolved) {
-    btn.disabled = true;
-    btn.innerHTML = '<i class="fas fa-check"></i> Test opposé effectué';
+  const content = root?.querySelector(".message-content") || root;
+  if (!content || content.querySelector(".mv-man-result-notice")) return;
+
+  const notice = document.createElement("div");
+  notice.className = "mv-man-result-notice";
+  const notes = [];
+  if (context.manoeuvreId === "repousser") {
+    const attacker = fromUuidSync(context.attackerActorUuid);
+    const distance = getActorAbilityTotal(attacker, "for") + 3;
+    notes.push(`Sur réussite, la cible recule de ${distance} m et l’attaquant occupe la place libérée.${context.isCornered ? ` Cible acculée : malus de ${distance} en DEF.` : ""}${context.advanceMovement ? " Déplacement préalable jusqu’à 10 m déclaré." : ""}`);
+  } else if (context.manoeuvreId === "renverser") {
+    notes.push(`La cible est renversée (-5 DEF) et le reste jusqu’à ce qu’elle consacre une action d’attaque pour se relever (bouton « Se relever »).${context.advanceMovement ? " Déplacement préalable jusqu’à 10 m déclaré." : ""}`);
+  } else if (context.manoeuvreId === "desarmer") {
+    notes.push("L’arme est au sol. La cible peut la ramasser avant tout le monde en sacrifiant son prochain tour, ou plus tard (bouton « Ramasser son arme »).");
+  } else if (context.manoeuvreId === "gener" && context.effectChoice === "slowed") {
+    notes.push("Option « ralentie » : la cible ne peut effectuer qu’une action de déplacement ou d’attaque.");
+  } else if (context.manoeuvreId === "etourdir") {
+    notes.push("Règle : la cible étourdie ne peut pas agir et subit -5 en DEF pendant 1 round.");
   }
-};
+  const attacker = fromUuidSync(context.attackerActorUuid);
+  if (context.manoeuvreId === "bloquer" && context.canMaintainBlock && (game.user.isGM || attacker?.isOwner)) {
+    notes.push("La cible reste immobilisée tant que la prise est maintenue : au début de chacun de ses tours, l’attaquant fait un test opposé de FOR. Un échec, un refus ou un tour sans tentative relâche la prise.");
+  }
+  if (context.manoeuvreId === "etourdir" && context.stunSaveEligible) {
+    notes.push(`La cible est surprise et son NC est inférieur : test de CON contre difficulté ${context.stunDifficulty} lancé automatiquement.`);
+  }
+  if (context.outOfCombat && context.hasTimedEffect) {
+    notes.push("Hors combat : l’effet d’un round n’expire pas automatiquement et doit être retiré par le MJ.");
+  }
+  if (notes.length) {
+    const text = document.createElement("div");
+    text.textContent = notes.join(" ");
+    notice.append(text);
+  }
 
-Hooks.on("renderChatMessageHTML", syncOpposedChatButtonState);
+  if (context.manoeuvreId === "bloquer" && context.canMaintainBlock && (game.user.isGM || attacker?.isOwner)) {
+    appendMaintainButton(notice, message, context);
+  }
 
-Hooks.once("ready", () => {
-  document.body.addEventListener("click", (ev) => {
-    const btn = ev.target.closest(".mv-man-oppose-btn");
-    if (!btn || btn.disabled) return;
-    const messageId = btn.closest("[data-message-id]")?.dataset?.messageId;
-    if (!messageId) return;
-    const message = game.messages?.get(messageId);
-    const opposedData = message?.getFlag?.(MODULE_ID, "opposedData");
-    if (!opposedData || opposedData.resolved) return;
-    ev.preventDefault();
-    ev.stopPropagation();
-    openOpposedManoeuvreDialog(message, opposedData, btn);
-  });
+  // Renverser / Désarmer : actions de la cible (propriétaire de la cible ou MJ)
+  const targetActor = fromUuidSync(context.targetActorUuid);
+  if (targetActor?.isOwner && context.manoeuvreId === "renverser") {
+    appendActionButton(notice, "Se relever (action d’attaque)", async button => {
+      button.disabled = true;
+      await standUp(targetActor);
+    });
+  }
+  if (targetActor?.isOwner && context.manoeuvreId === "desarmer") {
+    appendActionButton(notice, "Ramasser son arme", async button => {
+      button.disabled = true;
+      await pickUpWeapon(targetActor);
+    });
+  }
+
+  if (context.outOfCombat && context.hasTimedEffect && context.effectSlug && game.user.isGM) {
+    const removeButton = document.createElement("button");
+    removeButton.type = "button";
+    removeButton.className = "mv-man-maintain-btn mv-man-remove-effect-btn";
+    removeButton.textContent = "Retirer l’effet de la manœuvre";
+    removeButton.addEventListener("click", event => {
+      event.preventDefault();
+      event.stopPropagation();
+      removeManoeuvreEffect(context, removeButton);
+    });
+    notice.append(removeButton);
+  }
+  if (notice.childElementCount) content.append(notice);
 });
+
+/* ==========================================================================
+   5. CONFIGURATION DU TEST ET JET OPPOSÉ NATIF COF2
+   ========================================================================== */
+
+function escapeHtml(value) {
+  return String(value ?? "").replace(/[&<>"']/g, character => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+    "'": "&#39;"
+  })[character]);
+}
+
+// Empêche deux manœuvres simultanées du même acteur (le lien jet ↔ manœuvre resterait ambigu)
+async function rollManoeuvre(actor, manoeuvre, sourceTokenId = null) {
+  if (activeManoeuvreActors.has(actor.uuid)) {
+    ui.notifications.warn("Une manœuvre de cet acteur est déjà en cours.");
+    return;
+  }
+  activeManoeuvreActors.add(actor.uuid);
+  try {
+    await performManoeuvreRoll(actor, manoeuvre, sourceTokenId);
+  } finally {
+    activeManoeuvreActors.delete(actor.uuid);
+  }
+}
+
+async function performManoeuvreRoll(actor, manoeuvre, sourceTokenId = null) {
+  const targets = actor.acquireTargets("single", "all", 1, `Manœuvre : ${manoeuvre.name}`);
+  const target = targets[0];
+  if (!target?.token || !target.actor) {
+    ui.notifications.warn("Ciblez exactement un token pour effectuer une manœuvre.");
+    return;
+  }
+
+  const sizeModifier = manoeuvre.sizeSensitive ? getSizeModifier(actor, target.actor) : 0;
+  const repetitionCount = getDiminishingReturnsCount(sourceTokenId, actor, target.token, manoeuvre.id);
+  const diminishingPenalty = repetitionCount > 0 ? -5 * repetitionCount : 0;
+  const extraBonuses = getManoeuvreItemAndEffectBonuses(actor, manoeuvre);
+  const strength = getActorAbilityTotal(actor, "for");
+  const extraFields = [
+    '<div class="mv-man-row-opt"><label for="mv-man-attack-mode">Mode d’attaque (si validé par le MJ) :</label><select id="mv-man-attack-mode" name="attackMode"><option value="melee">Au contact</option><option value="ranged">À distance</option><option value="magical">Magique</option></select></div>',
+    '<label class="mv-man-opt"><input type="checkbox" name="isFinesse"/> Attaque au contact en finesse (AGI remplace FOR)</label>',
+    manoeuvre.id === "gener"
+      ? '<div class="mv-man-row-opt"><label for="mv-man-gener-choice">Effet si réussite :</label><select id="mv-man-gener-choice" name="generChoice"><option value="slowed">Cible ralentie (une action M ou A)</option><option value="attackPenalty">Malus de -5 en attaque</option></select></div>'
+      : "",
+    manoeuvre.id === "repousser"
+      ? `<label class="mv-man-opt"><input type="checkbox" name="isCornered"/> Cible acculée (malus de ${strength + 3} en DEF pendant 1 round)</label><label class="mv-man-opt"><input type="checkbox" name="advanceMovement"/> Déplacement préalable de l’attaquant (jusqu’à 10 m)</label>`
+      : "",
+    manoeuvre.id === "renverser"
+      ? '<label class="mv-man-opt"><input type="checkbox" name="isQuadruped"/> Cible quadrupède (malus de -10 au test au lieu de -5)</label><label class="mv-man-opt"><input type="checkbox" name="advanceMovement"/> Déplacement préalable de l’attaquant (jusqu’à 10 m)</label>'
+      : "",
+    manoeuvre.id === "etourdir"
+      ? `<label class="mv-man-opt"><input type="checkbox" name="isTargetSurprised" ${target.actor.statuses?.has("surprised") ? "checked" : ""}/> Cible surprise</label><label class="mv-man-opt"><input type="checkbox" name="isBludgeoning"/> Arme infligeant des DM contondants (difficulté du test de CON : 15)</label>`
+      : ""
+  ].join("");
+
+  const sizeLine = manoeuvre.sizeSensitive
+    ? `<div class="mv-man-chat-sub">Différence de taille appliquée automatiquement : ${sizeModifier >= 0 ? "+" : ""}${sizeModifier}</div>`
+    : "";
+  const repetitionLine = repetitionCount > 0
+    ? `<div class="mv-man-repetition-info"><i class="fas fa-redo-alt"></i><span>Répétitions sur cette cible : <strong>${repetitionCount}</strong> (${diminishingPenalty})</span></div>`
+    : "";
+  const content =
+    `<div class="mv-man-roll-dialog">
+      <div class="mv-man-roll-head">
+        <img src="${manoeuvre.img}" width="36" height="36"/>
+        <div><strong>${manoeuvre.name}</strong><div class="mv-man-chat-sub">Cible : ${escapeHtml(target.name)}</div>${sizeLine}</div>
+      </div>
+      ${repetitionLine}
+      <div class="mv-man-row-opt">
+        <label for="mv-man-situational">Modificateur circonstanciel :</label>
+        <input id="mv-man-situational" type="number" name="situational" value="0" step="1"/>
+      </div>
+      ${extraFields}
+    </div>`;
+  const options = await foundry.applications.api.DialogV2.wait({
+    window: { title: `Manœuvre : ${manoeuvre.name}` },
+    position: { width: 460 },
+    classes: ["dialog", "mv-man-dialog"],
+    content,
+    rejectClose: false,
+    buttons: [
+      {
+        action: "roll",
+        label: "Lancer le test opposé",
+        icon: "fas fa-dice-d20",
+        default: true,
+        callback: (event, button) => {
+          const form = button.form;
+          const situational = Number(form.elements.namedItem("situational")?.value || 0);
+          if (!Number.isFinite(situational)) {
+            ui.notifications.warn("Le modificateur circonstanciel doit être un nombre valide.");
+            return false;
+          }
+          return {
+            situational,
+            generChoice: form.elements.namedItem("generChoice")?.value || "slowed",
+            isCornered: Boolean(form.elements.namedItem("isCornered")?.checked),
+            isQuadruped: Boolean(form.elements.namedItem("isQuadruped")?.checked),
+            advanceMovement: Boolean(form.elements.namedItem("advanceMovement")?.checked),
+            attackMode: form.elements.namedItem("attackMode")?.value || "melee",
+            isFinesse: Boolean(form.elements.namedItem("isFinesse")?.checked),
+            isBludgeoning: Boolean(form.elements.namedItem("isBludgeoning")?.checked),
+            isTargetSurprised: Boolean(form.elements.namedItem("isTargetSurprised")?.checked)
+          };
+        }
+      },
+      {
+        action: "cancel",
+        label: "Annuler",
+        icon: "fas fa-times",
+        callback: () => null
+      }
+    ]
+  });
+  if (!options) return;
+
+  const modifier = (manoeuvre.id === "renverser" && options.isQuadruped ? -10 : manoeuvre.modValue)
+    + (manoeuvre.useCha ? getActorChaMod(actor) : 0)
+    + extraBonuses.total
+    + diminishingPenalty
+    + sizeModifier
+    + options.situational;
+  const attackTypes = {
+    melee: { actionType: game.system.CONST.ACTION_TYPES.melee.id, formula: options.isFinesse ? "@atc + @agi - @for" : "@atc" },
+    ranged: { actionType: game.system.CONST.ACTION_TYPES.ranged.id, formula: "@atd" },
+    magical: { actionType: game.system.CONST.ACTION_TYPES.magical.id, formula: "@atm" }
+  };
+  const attack = attackTypes[options.attackMode] || attackTypes.melee;
+  // Maintien de Bloquer possible (en combat, contre une cible de NC inférieur au niveau de l'attaquant)
+  const canMaintainBlock = Boolean(game.combat?.started && (() => {
+    const attackerRank = getActorManeuverRank(actor);
+    const targetRank = getActorNC(target.actor);
+    return attackerRank !== null && targetRank !== null && targetRank < attackerRank;
+  })());
+  let customEffect = buildManoeuvreEffect(actor, manoeuvre, { ...options, canMaintainBlock }, sourceTokenId);
+  if (customEffect) {
+    customEffect = {
+      ...customEffect,
+      statuses: customEffect.statuses.filter(status => !target.actor.statuses?.has(status))
+    };
+    const isGenerAttackPenalty = customEffect.slug.endsWith(`-gener${GENER_ATTACK_SLUG_SUFFIX}`);
+    if (!isGenerAttackPenalty && customEffect.statuses.length === 0 && customEffect.modifiers.length === 0) customEffect = null;
+  }
+  // Hors combat, l'effet est appliqué quand même ; il n'expirera pas seul (bouton de retrait pour le MJ dans le chat)
+  const outOfCombat = !game.combat?.started || game.combat.round === null;
+
+  const additionalEffect = {
+    active: Boolean(customEffect),
+    applyOn: "success",
+    // Les états sont portés par customEffect : les mettre ici afficherait des cases à cocher dans la fenêtre
+    // du système et les états propres au module (Aveuglé/Renversé) seraient refusés par le modèle de données
+    statuses: new Set(),
+    duration: "1",
+    unit: "round"
+  };
+  const attackItem = {
+    id: "",
+    uuid: "",
+    name: `Manœuvre : ${manoeuvre.name}`,
+    img: manoeuvre.img,
+    type: "feature",
+    system: { properties: { reloadable: false } }
+  };
+  const metadata = {
+    attackerActorUuid: actor.uuid,
+    attackerActorId: actor.id,
+    attackerTokenId: sourceTokenId || null,
+    targetActorUuid: target.actor.uuid,
+    targetTokenId: target.token.id,
+    targetUuid: target.uuid,
+    oppositeValue: "@oppose.atc",
+    manoeuvreId: manoeuvre.id,
+    effectChoice: options.generChoice,
+    isCornered: options.isCornered,
+    outOfCombat,
+    hasTimedEffect: Boolean(customEffect),
+    effectSlug: customEffect?.slug || null,
+    advanceMovement: options.advanceMovement,
+    blockStartRound: game.combat?.started ? game.combat.round : null,
+    combatId: game.combat?.started ? game.combat.id : null,
+    blockEffectSlug: `manoeuvre-${sourceTokenId || actor.id}-bloquer`,
+    sizeModifier,
+    canMaintainBlock,
+    stunSaveEligible: manoeuvre.id === "etourdir" && isEligibleForStunSave(actor, target.actor, options.isTargetSurprised),
+    stunDifficulty: options.isBludgeoning ? 15 : 10,
+    type: "maneuver"
+  };
+  // Contexte lu par le hook co.resultRollAttack (lien direct) ; la file d'attente sert de secours
+  attackItem[MODULE_ID] = metadata;
+  const pendingKey = `${actor.id}:${manoeuvre.name}`;
+  const pending = pendingManoeuvreRolls.get(pendingKey) || [];
+  pending.push(metadata);
+  pendingManoeuvreRolls.set(pendingKey, pending);
+
+  const modifierParts = [
+    manoeuvre.modValue ? `Manœuvre ${manoeuvre.modValue}` : "",
+    `Attaque ${options.attackMode === "ranged" ? "à distance" : options.attackMode === "magical" ? "magique" : "au contact"}`,
+    options.isFinesse && options.attackMode === "melee" ? "Finesse AGI" : "",
+    options.isBludgeoning && manoeuvre.id === "etourdir" ? "Arme contondante" : "",
+    manoeuvre.useCha ? `CHA ${getActorChaMod(actor)}` : "",
+    ...extraBonuses.sources,
+    diminishingPenalty ? `Répétition ${diminishingPenalty}` : "",
+    sizeModifier ? `Taille ${sizeModifier}` : "",
+    options.situational ? `Circonstance ${options.situational}` : ""
+  ].filter(Boolean);
+
+  try {
+    await actor.rollAttack(attackItem, {
+      type: "attack",
+      actionName: manoeuvre.name,
+      actionType: attack.actionType,
+      chatFlavor: modifierParts.join(" | "),
+      skillBonus: Math.max(0, modifier),
+      skillMalus: Math.min(0, modifier),
+      skillFormula: attack.formula,
+      skillFormulaTooltip: attack.formula,
+      difficulty: "@oppose.atc",
+      useDifficulty: true,
+      critical: NO_CRITICAL_THRESHOLD,
+      criticalTooltip: "Pas de réussite critique pour une manœuvre",
+      withDialog: true,
+      targetType: "single",
+      targetScope: "all",
+      targets,
+      customEffect,
+      additionalEffect
+    });
+  } catch (error) {
+    console.error(`${MODULE_ID} | Erreur lors du jet de manœuvre :`, error);
+    ui.notifications.error(`Erreur lors du jet de manœuvre : ${error.message}`);
+  } finally {
+    const remaining = pendingManoeuvreRolls.get(pendingKey);
+    if (remaining) {
+      const index = remaining.indexOf(metadata);
+      if (index >= 0) remaining.splice(index, 1);
+      if (remaining.length === 0) pendingManoeuvreRolls.delete(pendingKey);
+    }
+  }
+}
 
 /* ==========================================================================
    7. INJECTION DE L'ONGLET MANŒUVRES DANS LES FICHES D'ACTEURS COF2
    ========================================================================== */
 
+// Encart « états de manœuvre » en tête de l'onglet : actions pour se relever / ramasser son arme
+function refreshManoeuvreConditions(section, actor) {
+  const container = section.querySelector(".mv-man-container");
+  if (!container) return;
+  container.querySelector(".mv-man-conditions")?.remove();
+  if (!actor.isOwner) return;
+
+  const isProne = isActorProne(actor);
+  const isDisarmed = isActorDisarmed(actor);
+  if (!isProne && !isDisarmed) return;
+
+  const box = document.createElement("div");
+  box.className = "mv-man-conditions";
+  const title = document.createElement("div");
+  title.className = "mv-man-conditions-title";
+  title.textContent = [isProne ? "À terre" : "", isDisarmed ? "Désarmé(e)" : ""].filter(Boolean).join(" · ");
+  box.append(title);
+  const row = document.createElement("div");
+  row.className = "mv-man-btn-row";
+  if (isProne) {
+    appendActionButton(row, "Se relever (action d’attaque)", async button => {
+      button.disabled = true;
+      await standUp(actor);
+    });
+  }
+  if (isDisarmed) {
+    appendActionButton(row, "Ramasser son arme", async button => {
+      button.disabled = true;
+      await pickUpWeapon(actor);
+    });
+  }
+  box.append(row);
+  container.insertBefore(box, container.querySelector(".mv-man-grid"));
+}
+
 function injectManoeuvresTab(app, html) {
   if (game.system.id !== "co2") return;
 
   const actor = app.actor || app.document;
-  if (!actor) return;
+  if (!actor || actor.documentName !== "Actor") return;
+  const sourceTokenId = app.token?.id || actor.token?.id || actor.getActiveTokens()?.[0]?.id || null;
 
   const sheetWindow = app.element instanceof HTMLElement
     ? app.element
@@ -960,7 +1508,7 @@ function injectManoeuvresTab(app, html) {
       '<div class="mv-man-container">' +
         '<div class="mv-man-banner">' +
           '<div class="mv-man-banner-title"><i class="fas fa-fist-raised"></i> Les manœuvres (Action limitée — L)</div>' +
-          '<div class="mv-man-banner-sub">Test opposé d\'attaque au contact (pas de réussite critique). Aucun DM infligé, procure un avantage tactique.</div>' +
+          '<div class="mv-man-banner-sub">Test opposé d\'attaque au contact résolu par COF2. Aucun DM n\'est infligé ; la réussite applique l\'effet de la manœuvre.</div>' +
         '</div>' +
         '<div class="mv-man-grid">' + cardsHtml + '</div>' +
       '</div>';
@@ -974,7 +1522,7 @@ function injectManoeuvresTab(app, html) {
       card.querySelector(".mv-man-roll-btn")?.addEventListener("click", (ev) => {
         ev.preventDefault();
         ev.stopPropagation();
-        rollManoeuvre(actor, man);
+        rollManoeuvre(actor, man, sourceTokenId);
       });
 
       card.querySelector(".mv-man-info-btn")?.addEventListener("click", (ev) => {
@@ -989,6 +1537,8 @@ function injectManoeuvresTab(app, html) {
       });
     });
   }
+
+  refreshManoeuvreConditions(manSection, actor);
 
   const placement = game.settings.get(MODULE_ID, "tabPlacement") || "side";
 
@@ -1045,22 +1595,7 @@ function injectManoeuvresTab(app, html) {
       sideNav.insertBefore(manBtn, sideNav.firstChild);
     }
 
-    const syncSideNavVisibility = () => {
-      const isMinimized =
-        app.minimized === true ||
-        sheetWindow.classList.contains("minimized") ||
-        sheetWindow.offsetHeight < 120;
-      sideNav.classList.toggle("mv-sheet-minimized", isMinimized);
-    };
-
-    syncSideNavVisibility();
-
-    if (sheetWindow._mvManResizeObserver) {
-      sheetWindow._mvManResizeObserver.disconnect();
-    }
-    const resizeObserver = new ResizeObserver(() => syncSideNavVisibility());
-    resizeObserver.observe(sheetWindow);
-    sheetWindow._mvManResizeObserver = resizeObserver;
+    sideNav.classList.toggle("mv-sheet-minimized", app.minimized === true);
   }
 
   const deactivateManoeuvresTab = () => {
@@ -1071,10 +1606,8 @@ function injectManoeuvresTab(app, html) {
 
   const activateManoeuvresTab = () => {
     app._mvManoeuvresActive = true;
-    // Synchronise l'état interne de Foundry ApplicationV2 pour que le retour vers un autre onglet fonctionne
-    if (app.tabGroups && typeof app.tabGroups === "object") {
-      app.tabGroups.primary = "manoeuvres";
-    }
+    // Ne jamais écrire "manoeuvres" dans app.tabGroups : le système ne connaît pas cet onglet et la fiche
+    // plantait (puis refusait de se rouvrir) au rendu suivant. L'onglet est affiché uniquement via le DOM.
     sheetWindow.querySelectorAll('[data-action="tab"][data-group="primary"]').forEach(b => {
       b.classList.toggle("active", b.dataset.tab === "manoeuvres");
     });
@@ -1096,10 +1629,22 @@ function injectManoeuvresTab(app, html) {
       const clickedTab = ev.target.closest('[data-action="tab"][data-group="primary"]');
       if (!clickedTab || clickedTab.dataset.tab === "manoeuvres") return;
 
+      const wasActive = app._mvManoeuvresActive;
       app._mvManoeuvresActive = false;
       sheetWindow.querySelectorAll(".mv-man-side-btn, .mv-man-main-tab-btn").forEach(b => b.classList.remove("active"));
       const sec = contentArea.querySelector('section.tab[data-tab="manoeuvres"]');
       if (sec) sec.classList.remove("active");
+
+      // Retour vers l'onglet que Foundry croit déjà actif : il ne fait rien, on réaffiche l'onglet nous-mêmes
+      if (wasActive && app.tabGroups?.primary === clickedTab.dataset.tab) {
+        const tabId = clickedTab.dataset.tab;
+        sheetWindow.querySelectorAll('[data-action="tab"][data-group="primary"]').forEach(b => {
+          b.classList.toggle("active", b.dataset.tab === tabId);
+        });
+        contentArea.querySelectorAll('section.tab[data-group="primary"]').forEach(s => {
+          s.classList.toggle("active", s.dataset.tab === tabId);
+        });
+      }
     }, true);
   }
 
@@ -1110,7 +1655,5 @@ function injectManoeuvresTab(app, html) {
   }
 }
 
-Hooks.on("renderActorSheet", injectManoeuvresTab);
-Hooks.on("renderActorSheetV2", injectManoeuvresTab);
 Hooks.on("renderCOCharacterSheet", injectManoeuvresTab);
-Hooks.on("renderCONpcSheet", injectManoeuvresTab);
+Hooks.on("renderCOEncounterSheet", injectManoeuvresTab);

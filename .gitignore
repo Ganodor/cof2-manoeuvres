@@ -1,0 +1,9 @@
+# Archives de publication construites localement
+*.zip
+
+# Fichiers système / éditeur
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
