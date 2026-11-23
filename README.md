@@ -99,7 +99,3 @@ Identifiants des manœuvres : `distraire`, `gener`, `repousser`, `bloquer`, `des
 ## Journal des modifications
 
 Voir [CHANGELOG.md](CHANGELOG.md).
-
-## Licence
-
-Distribué sous licence MIT. Voir [LICENSE](LICENSE).
