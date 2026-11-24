@@ -378,6 +378,24 @@ Hooks.once("setup", () => {
     wrappedRollAttack._cof2ManoeuvresWrapped = true;
     proto.rollAttack = wrappedRollAttack;
   }
+
+  // Fin de combat : le système appelle deleteEffects() deux fois en parallèle (Combat#_onDelete et hook deleteCombat).
+  // Le second passage tente de retirer des statuts déjà supprimés (ex. Aveuglé) et lève une erreur.
+  // On partage la même promesse tant qu'un nettoyage est en cours pour un acteur.
+  const originalDeleteEffects = proto.deleteEffects;
+  if (typeof originalDeleteEffects === "function" && !originalDeleteEffects._cof2ManoeuvresWrapped) {
+    const pendingCleanups = new Map();
+    const wrappedDeleteEffects = function (...args) {
+      const key = this.uuid;
+      if (pendingCleanups.has(key)) return pendingCleanups.get(key);
+      const promise = Promise.resolve(originalDeleteEffects.apply(this, args))
+        .finally(() => pendingCleanups.delete(key));
+      pendingCleanups.set(key, promise);
+      return promise;
+    };
+    wrappedDeleteEffects._cof2ManoeuvresWrapped = true;
+    proto.deleteEffects = wrappedDeleteEffects;
+  }
 });
 
 Hooks.once("ready", () => {

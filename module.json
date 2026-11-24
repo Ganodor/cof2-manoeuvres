@@ -2,7 +2,7 @@
   "id": "cof2-manoeuvres",
   "title": "Cof2 - Manoeuvres",
   "description": "Ajoute un onglet Manœuvres aux fiches de personnages et de rencontres COF2, avec jets opposés et effets gérés par le système.",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "authors": [
     {
       "name": "Ganodor"
@@ -34,5 +34,5 @@
   "readme": "https://github.com/Ganodor/cof2-manoeuvres/blob/main/README.md",
   "changelog": "https://github.com/Ganodor/cof2-manoeuvres/blob/main/CHANGELOG.md",
   "manifest": "https://github.com/Ganodor/cof2-manoeuvres/releases/latest/download/module.json",
-  "download": "https://github.com/Ganodor/cof2-manoeuvres/releases/download/v2.0.0/cof2-manoeuvres.zip"
+  "download": "https://github.com/Ganodor/cof2-manoeuvres/releases/download/v2.0.1/cof2-manoeuvres.zip"
 }

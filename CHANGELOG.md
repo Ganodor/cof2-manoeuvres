@@ -1,5 +1,11 @@
 # Journal des modifications
 
+## 2.0.1
+
+### Corrections
+
+- Une erreur s’affichait à la fin d’un combat quand un combattant portait un état de manœuvre (ex. Aveuglé). Le système COF2 retirait les effets deux fois en parallèle ; le module ne laisse désormais passer qu’un seul nettoyage par acteur.
+
 ## 2.0.0
 
 Refonte de la résolution des manœuvres : effets appliqués de façon fiable, durées propres à chaque manœuvre et rappels de début de tour.
